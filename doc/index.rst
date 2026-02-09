@@ -21,3 +21,4 @@ AI4OSE内核文档
 
    env
    user
+   machine
