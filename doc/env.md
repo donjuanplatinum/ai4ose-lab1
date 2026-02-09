@@ -7,5 +7,16 @@
 
 可以查阅[NixOS](https://nixos.org)来了解更多.
 
-## 安装nix
+## 安装nix与配置环境
 为了使用nix包管理器 我们需要安装nix(当然您也可以安装NixOS系统).
+
+```shell
+sh <(curl --proto '=https' --tlsv1.2 -L https://nixos.org/nix/install) --no-daemon
+```
+
+安装完nix后 执行这条命令
+```shell
+nix  --extra-experimental-features 'nix-command flakes' develop --option substituters "https://mirrors.tuna.tsinghua.edu.cn/nix-channels/store"
+```
+
+这条命令会根据仓库的flake.nix来构建环境
