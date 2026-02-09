@@ -16,7 +16,7 @@ AI4OSE
 
 * **原子性 (Atomicity)** ：利用 ``Nix`` 等工具链确保环境一致性。
 * **工程级标准 (Engineering Excellence)** ：所有模块支持发布至 `Crates.io <https://crates.io>`_ 。
-* **AI 协同 (AI Synergy)** ：由 AI 自动生成高质量习题。
+* **AI 协同 费曼学习法 (AI Synergy)** ：由 AI 自动生成高质量问题 根据费曼学习法 通过您的回答由AI助手判断您的掌握程度。
 * **性能基准集成 (Bench Integration)** ：针对 **Cache Hit Rate** 等指标生成分析报告。
 
 技术环境
@@ -48,3 +48,9 @@ AI4OSE
    pip install -r requirements-version.txt
    make html
 
+
+.. toctree::
+   :maxdepth: 1
+
+   doc/index
+     
