@@ -7,6 +7,35 @@
 
 可以查阅[NixOS](https://nixos.org)来了解更多.
 
+AI助手 本章思维导图:
+```
+mindmap
+  root((AI4OSE 环境配置))
+    Nix 原子化部署
+      原理: 函数式输入 = 固定环境输出
+      工具: Nix Flakes
+      优势
+        消除 Distro 差异
+        一键部署交叉编译工具链
+        版本锁定: QEMU 7.0 / Rust Nightly 2024-05-02
+    核心工具链
+      Rust
+        Target: riscv64gc-unknown-none-elf
+        Component: rust-src, llvm-tools-preview
+      QEMU 7.0
+        System: qemu-system-riscv64
+        User: qemu-riscv64
+      Debugger: GDB + Python 脚本
+    rCore-Tutorial 运行
+      源码控制: git checkout ch1
+      底层接口: RustSBI (Supervisor Binary Interface)
+      特权级切换: User -> Supervisor (Kernel)
+    AI 协同学习 (Active Recall)
+      原子性理解: 一致性 / 回滚 / CAS 指令
+      QEMU 作用: 快速迭代 / GDB Stub 调试 / 硬件模拟
+      性能分析: 缓存命中率 / 系统调用开销 (Bench 集成预留)
+```
+
 ## 安装nix与配置环境
 ### Nix安装
 为了使用nix包管理器 我们需要安装nix(当然您也可以安装NixOS系统).
@@ -107,10 +136,43 @@ qemu-system-riscv64 --version
 QEMU emulator version 7.0.0
 Copyright (c) 2003-2022 Fabrice Bellard and the QEMU Project developers
 ```
+## 运行rCore
+```shell
+git clone https://github.com/LearningOS/rCore-Tutorial-Code-2025S
+cd rCore-Tutorial-Code-2025S
+git checkout ch1
+cd os
+LOG=DEBUG make run
+```
+
+接下来您会得到如下输出
+```shell
+[rustsbi] RustSBI version 0.3.0-alpha.4, adapting to RISC-V SBI v1.0.0
+.______       __    __      _______.___________.  _______..______   __
+|   _  \     |  |  |  |    /       |           | /       ||   _  \ |  |
+|  |_)  |    |  |  |  |   |   (----`---|  |----`|   (----`|  |_)  ||  |
+|      /     |  |  |  |    \   \       |  |      \   \    |   _  < |  |
+|  |\  \----.|  `--'  |.----)   |      |  |  .----)   |   |  |_)  ||  |
+| _| `._____| \______/ |_______/       |__|  |_______/    |______/ |__|
+[rustsbi] Implementation     : RustSBI-QEMU Version 0.2.0-alpha.2
+[rustsbi] Platform Name      : riscv-virtio,qemu
+[rustsbi] Platform SMP       : 1
+[rustsbi] Platform Memory    : 0x80000000..0x88000000
+[rustsbi] Boot HART          : 0
+[rustsbi] Device Tree Region : 0x87000000..0x87000ef2
+[rustsbi] Firmware Address   : 0x80000000
+[rustsbi] Supervisor Address : 0x80200000
+[rustsbi] pmp01: 0x00000000..0x80000000 (-wr)
+[rustsbi] pmp02: 0x80000000..0x80200000 (---)
+[rustsbi] pmp03: 0x80200000..0x88000000 (xwr)
+[rustsbi] pmp04: 0x88000000..0x00000000 (-wr)
+[kernel] Hello, world!
+```
 ## AI助手提问
 
 ### 环境
 #### 示例问题
+点击三角符号展开
 
 <details>
 <summary><b>什么是原子性? 原子性有哪些好处?为什么NixOS要选择使用原子性的特性?原子性在CPU底层有哪些用处?</b></summary>

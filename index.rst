@@ -16,8 +16,8 @@ AI4OSE
 
 * **原子性 (Atomicity)** ：利用 ``Nix`` 工具的原子级别包管理特性完美的复现环境 以减少配置环境的时间。
 * **工程级标准 (Engineering Excellence)** ： 使用Github的workflow CI来对代码进行**质量检测**,**类型检查**,**性能分析**. 所有模块支持发布至 `Crates.io <https://crates.io>`_ 。
-* **AI 协同 费曼学习法 (AI Synergy)** ：由 AI 在每一节的末尾自动生成高质量问题 同时会提供建议向AI询问的常见问题 根据费曼学习法 通过您的回答由AI助手判断您的掌握程度。
-* **性能基准与AI集成 (Bench Integration)** ：使用Perf Valigrind Strace GDB等工具动态的生成性能报告 并将报告结合AI大模型助手进行分析。
+* **AI 协同 费曼学习法 (AI Synergy)** ：由 AI 在每一节的末尾自动生成高质量问题, 并由AI生成思维导图。 同时会提供建议向AI询问的常见问题 根据费曼学习法 通过您的回答由AI助手判断您的掌握程度。
+* **性能基准与AI集成 (Bench Integration)** ：使用Perf Valigrind Strace GDB criterion等工具动态的生成性能报告 并将报告结合AI大模型助手进行分析。
 
 技术环境
 ========
