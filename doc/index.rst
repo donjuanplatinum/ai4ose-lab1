@@ -5,7 +5,6 @@ AI4OSE内核文档
 本教程会展示如何*从0开始* 使用*Rust语言* *AI工具* *WorkFlow工作流* *性能bench工具* 来实现基于RISC-V架构的类UNIX内核.
 
 导读
-======
 
 - 首先您需要具有一定的Rust基础 其次您需要熟悉如何使用AI工具 例如Gemini.
 
@@ -22,7 +21,3 @@ AI4OSE内核文档
    env
    user
    machine
-
-
-
-
