@@ -136,6 +136,7 @@ qemu-system-riscv64 --version
 QEMU emulator version 7.0.0
 Copyright (c) 2003-2022 Fabrice Bellard and the QEMU Project developers
 ```
+## 实验1 编写一个可发布到crates.io的最简单rust程序
 ## 运行rCore
 ```shell
 git clone https://github.com/LearningOS/rCore-Tutorial-Code-2025S
@@ -168,6 +169,7 @@ LOG=DEBUG make run
 [rustsbi] pmp04: 0x88000000..0x00000000 (-wr)
 [kernel] Hello, world!
 ```
+
 ## AI助手提问
 
 ### 环境

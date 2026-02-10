@@ -17,8 +17,12 @@ AI4OSE内核文档
 
 
 .. toctree::
-   :maxdepth: 1
+   :maxdepth: 3
 
    env
    user
    machine
+
+
+
+
