@@ -88,3 +88,226 @@ pub fn shutdown() -> ! {
 }
 
 ```
+
+### 关机功能实现
+```rust
+const SBI_SHUTDOWN: usize = 8;
+
+pub fn shutdown() -> ! {
+    sbi_call(SBI_SHUTDOWN, 0, 0, 0);
+    panic!("It should shutdown!");
+}
+
+// os/src/main.rs
+#[no_mangle]
+extern "C" fn _start() {
+    shutdown();
+}
+```
+
+通过对SBI的ecall调用 实现了shutdown
+
+这个时候我们来尝试运行 会遇到问题
+```shell
+# 编译生成ELF格式的执行文件
+$ cargo build --release
+ Compiling os v0.1.0 (/media/chyyuu/ca8c7ba6-51b7-41fc-8430-e29e31e5328f/thecode/rust/os_kernel_lab/os)
+  Finished release [optimized] target(s) in 0.15s
+# 把ELF执行文件转成bianary文件
+$ rust-objcopy --binary-architecture=riscv64 target/riscv64gc-unknown-none-elf/release/os --strip-all -O binary target/riscv64gc-unknown-none-elf/release/os.bin
+
+# 加载运行
+$ qemu-system-riscv64 -machine virt -nographic -bios ../bootloader/rustsbi-qemu.bin -device loader,file=target/riscv64gc-unknown-none-elf/release/os.bin,addr=0x80200000
+# 无法退出，风扇狂转，感觉碰到死循环
+```
+
+
+这是因为**入口地址**并不是0x80200000 默认的链接器脚本不会把程序入口固定在0x80200000 所以我们需要通过**链接脚本** 来修改程序的**栈空间**
+
+首先修改`.cargo/config`来修改链接脚本
+```toml
+[build]
+target = "riscv64gc-unknown-none-elf"
+
+[target.riscv64gc-unknown-none-elf]
+rustflags = [
+    "-Clink-arg=-Tsrc/linker.ld", "-Cforce-frame-pointers=yes"
+]
+```
+
+rustflags代表了
+- `-Clink-arg`: rustc的codegen选项 表示 将接下来的参数**原封不动**的传递给**链接器**
+- `-Tsrc/linker.ld`: -T代表指定链接脚本的路径  src/linker.ld是链接脚本地址
+- `-Cforce-frame-pointers=yes`: 强制编译器为每一个函数保留**帧指针**
+
+#### 链接脚本
+```ld
+OUTPUT_ARCH(riscv)
+ENTRY(_start)
+BASE_ADDRESS = 0x80200000;
+
+SECTIONS
+{
+    . = BASE_ADDRESS;
+    skernel = .;
+
+    stext = .;
+    .text : {
+        *(.text.entry)
+        *(.text .text.*)
+    }
+
+    . = ALIGN(4K);
+    etext = .;
+    srodata = .;
+    .rodata : {
+        *(.rodata .rodata.*)
+        *(.srodata .srodata.*)
+    }
+
+    . = ALIGN(4K);
+    erodata = .;
+    sdata = .;
+    .data : {
+        *(.data .data.*)
+        *(.sdata .sdata.*)
+    }
+
+    . = ALIGN(4K);
+    edata = .;
+    .bss : {
+        *(.bss.stack)
+        sbss = .;
+        *(.bss .bss.*)
+        *(.sbss .sbss.*)
+    }
+
+    . = ALIGN(4K);
+    ebss = .;
+    ekernel = .;
+
+    /DISCARD/ : {
+        *(.eh_frame)
+    }
+}
+```
+
+我们来仔细的拆解这个ld（使用的LLVM ld语法 因为Rust的后端默认LLD）
+
+##### 第一部分 全局配置
+- OUTPUT_ARCH(riscv): 指定了链接器链接的平台
+- ENTRY(_start): 函数的入口点符号为_start
+- BASE_ADDRESS: 定义一个常量。 这个地址0x8020000是内核在S态下被引导的物理地址 所以如果BASE_ADDRESS是这个地址 那么这个程序是内核。
+
+##### 第二部分 SECTIONS布局
+这个部分是定义了各个段数据在文件和内存中的排列方式
+
+一个基本的ELF应该有这些段
+
+| 段          | 属性                | 说明                      |
+|-------------|---------------------|---------------------------|
+| .text       | AX(Alloc/Exec)      | 机器指令 也就是核心代码   |
+| .data       | WA(Write/Alloc)     | 已经初始化的全局/静态变量 |
+| .bss        | WA                  | 未初始化的全局变量        |
+| .rodata     | A(Alloc)            | 只读的常量                |
+
+- `.`: 代表当前程序的位置计数器 所以`. = BASE_ADDRESS` 代表所有布局都从`0x80200000`开始
+- `skernel=./stext=.`: 代表定义符号skernel/stext 可以在rust里访问这个符号
+
+- `.text : {*(.text.entry) *(.text .text.*)}`:
+
+`.text:{}`代表创建一个名为.text的输出段
+
+`*(.text.entry)` 代表强制将所有输入文件中的`.text.entry`放在最前面 
+
+`*(.text .text.*)`: 收集.text段的所有指令
+
+`.=ALIGN(4k)`: 将当前地址对齐到4kb
+
+后面的指令都差不多 只不过是从设置.text段到设置.rodata .data .bss段
+#### 汇编实现
+这里需要rust内联汇编来**初始化栈空间**
+
+```asm
+     .section .text.entry
+     .globl _start
+_start:
+     la sp, boot_stack_top
+     call rust_main
+ 
+     .section .bss.stack
+     .globl boot_stack
+boot_stack:
+    .space 4096 * 16
+    .globl boot_stack_top
+boot_stack_top:
+```
+
+- `.section .text.entry` 这里代表了定义一个`.text.entry`代码段 配合链接脚本里的`*(.text.entry)` 确保了这段汇编指令会被放置在内存的`0x8020000`
+
+- `.global _start` 将_start符号声明为**全局可见** 这里能让链接器找到_start. 所以链接器里才能些`ENTRY(_start)`
+
+- `_start:` 汇编标签
+- `la sp,boot_stack_top` 将栈顶符号`boot_stack_op`地址加载到栈寄存器`sp`
+- `call rust_main` 调用rust的函数 rust_main
+- `.section .bss.stack` 定义一个名为.bss.stack的段 对应链接器的`*(.bss.stack)`
+- `.global boot_stack` 栈底符号
+- `.space 4096*16`: 预留4096*16 即64kb的连续空间
+
+这是内存布局的图
+
+```
+[ 低地址 ]
+0x80200000 ->  +------------------+
+               |  .text.entry     |  <- 执行 la sp, boot_stack_top
+               +------------------+
+               |  ...rust_main...   |
+               +------------------+
+               |  .bss.stack      |  <- boot_stack (栈底)
+               |  (64KB 空间)      |       |
+               |                  |       | 栈向下增长 (SP--)
+               |                  |       v
+               +------------------+
+               |  boot_stack_top  |  <- 初始 SP 指向这里
+[ 高地址 ]
+```
+#### 实现入口
+现在可以导入刚才的汇编了 然后我们将入口改为rust_main
+
+> 注意！#[no_mangle]必须添加 rust**默认会混淆函数名**。 否则汇编和链接器将无法正常看到rust_main的名字
+```rust
+
+core::arch::global_asm!(include_str!("entry.asm"));
+
+#[no_mangle]
+pub fn rust_main() -> ! {
+	shutdown();
+}
+```
+
+#### 清空.bss
+在程序开始之前 我们应该先**清空.bss段**。 因为虽然很多操作系统会去清空 **但是我们最好不把这个作为信任前提** 所以我们手动清空bss
+
+```rust
+fn clear_bss() {
+	extern "C" {
+	 // 这里对应了.ld中的sbss和ebss 同时注意
+	 // 函数指针默认指向的是第一个地址 所以使用函数指针可以指向sbss和ebss的头
+	fn sbss();
+	fn ebss();
+}
+(sbss as usize..ebss as usize).for_each(|a|
+	{
+	// 写0
+	
+	unsafe {(a as *mut u8).write_volatile(0)}
+};
+)
+}
+#[no_mangle]
+pub fn  rust_main() -> ! {
+clear_bss();
+shutdown();
+}
+```
+
