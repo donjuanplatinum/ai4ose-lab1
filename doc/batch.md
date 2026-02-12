@@ -499,6 +499,70 @@ pub fn run_next_app() -> ! {
 #### 用户栈与内核栈
 这部分是Trap触发的时候 CPU需要保存的信息
 
+我们引入特权级相关的流程
+
+##### trap流程
+当用户态执行 ecall 或发生访存错误时，RISC-V 硬件会瞬间完成以下动作（以 U 态进入 S 态为例）：
+
+记录现场地址：把当前指令的下一条地址（或是当前指令地址）存入 sepc。
+
+记录原因：根据发生的具体情况填充 scause（如 Environment Call from U-mode），并可能将出错地址填入 stval。
+
+状态备份：将 sstatus 中的 SIE（内核全局中断使能）备份到 SPIE 位，然后将 SIE 置零（防止在处理 Trap 时被再次中断）。
+
+保存特权级：将发生 Trap 时的特权级记录在 sstatus 的 SPP 位。
+
+模式提升：将当前的特权级提升至 S-Mode。
+
+跳转入口：将 PC 指向 stvec 寄存器所指向的地址（通常是汇编入口 __alltraps）。
+
+```
+User Mode (U)          |           Supervisor Mode (S)
+   (App Execution Flow)       |          (Kernel Logic Flow)
+------------------------------|---------------------------------------------
+                              |
+ [1] User App 运行中           |
+     PC = 0x80400000          |
+     sp = UserStack_Addr      |
+             |                |
+ [2] 触发 ecall / 异常 --------> [3] 硬件自动同步处理 (CSR Update)
+                              |     - sepc <- PC, scause <- Cause
+                              |     - sstatus.SPP <- U, sstatus.SIE <- 0
+                              |     - PC <- stvec (__alltraps 地址)
+                              |               |
+                              | [4] __alltraps (汇编层: 现场封存)
+                              |     - csrrw sp, sscratch, sp (换栈：sp变为内核栈)
+                              |     - addi sp, sp, -34*8 (在栈上开辟 TrapContext)
+                              |     - sd x1...x31, 0(sp) (将所有通用寄存器压栈)
+                              |     - sd t0, t1 (保存 sstatus, sepc 到栈上)
+                              |               |
+                              | [5] trap_handler (Rust层: 逻辑分发)
+                              |     - 根据 scause 执行具体 Syscall
+                              |     - 修改 TrapContext 中的 sepc (跳过ecall)
+                              |               |
+                              | [6] __restore (汇编层: 现场还原)
+                              |     - mv sp, a0 (sp 指向处理后的 TrapContext)
+                              |     - ld t0, t1 (恢复 sstatus, sepc 到 CSR)
+                              |     - ld x1...x31 (从栈上恢复所有通用寄存器)
+                              |     - addi sp, sp, 34*8 (释放栈空间)
+                              |     - csrrw sp, sscratch, sp (换栈：sp变回用户栈)
+                              |               |
+ [8] User App 继续运行 <------- [7] sret (硬件返回指令)
+     PC = sepc (新地址)        |     - 根据 sstatus.SPP 切换回 U 模式
+     sp = UserStack_Addr      |     - 恢复中断使能, PC <- sepc
+                              |
+------------------------------|---------------------------------------------
+```
+
+其中 大部分CSR寄存器是RISCV设置的 而通用寄存器和少部分CSR需要我们自己设置
+
+必须在内核栈上开辟空间，手动执行指令保存：
+
+通用寄存器 (x1-x31)：通过 sd 指令存入内核栈。
+
+特殊 CSR：需要手动将 sstatus 和 sepc 读取并存入栈中（因为如果内核处理过程中再次发生中断，这些 CSR 会被硬件自动覆盖）。 也需要手动设置stvec
+##### 保存用户栈与内核栈
+在 Trap 触发的一瞬间， CPU 会切换到 S 特权级并跳转到 stvec 所指示的位置。 但是在正式进入 S 特权级的 Trap 处理之前，我们必须保存原控制流的寄存器状态，这一般通过栈来完成。 但我们需要用专门为操作系统准备的内核栈，而不是应用程序运行时用到的用户栈。
 ```rust
 
 #[repr(align(4096))]
@@ -518,3 +582,161 @@ static USER_STACK: UserStack = UserStack {
   data: [0; USER_STACK_SIZE],
 };
 ```
+### os/src/trap/context.rs
+Trap的上下文 即 Trap发生时保存的资源内容
+
+```rust
+use riscv::register::sstatus::{self, Sstatus, SPP};
+/// Trap Context
+#[repr(C)]
+pub struct TrapContext {
+    /// general regs[0..31]
+    pub x: [usize; 32], // 寄存器
+    /// CSR sstatus      
+    pub sstatus: Sstatus, // sstatus csr
+    /// CSR sepc
+    pub sepc: usize, // sepc csr
+}
+
+impl TrapContext {
+    /// set stack pointer to x_2 reg (sp)
+    pub fn set_sp(&mut self, sp: usize) {
+        self.x[2] = sp;
+    }
+    /// init app context
+    pub fn app_init_context(entry: usize, sp: usize) -> Self {
+        let mut sstatus = sstatus::read(); // CSR sstatus
+        sstatus.set_spp(SPP::User); //previous privilege mode: user mode
+        let mut cx = Self {
+            x: [0; 32],
+            sstatus,
+            sepc: entry, // entry point of app
+        };
+        cx.set_sp(sp); // app's user stack pointer
+        cx // return initial Trap Context of app
+    }
+}
+```
+### os/src/trap/mod.rs
+trap的处理函数
+```rust
+global_asm!(include_str!("trap.S"));
+
+/// initialize CSR `stvec` as the entry of `__alltraps`
+pub fn init() {
+    extern "C" {
+        fn __alltraps();
+    }
+    unsafe {
+        stvec::write(__alltraps as usize, TrapMode::Direct); // 调整stvec csr
+    }
+}
+
+#[no_mangle]
+/// handle an interrupt, exception, or system call from user space
+pub fn trap_handler(cx: &mut TrapContext) -> &mut TrapContext {
+    let scause = scause::read(); // get trap cause
+    let stval = stval::read(); // get extra value
+    match scause.cause() {
+        Trap::Exception(Exception::UserEnvCall) => {
+            cx.sepc += 4;
+            cx.x[10] = syscall(cx.x[17], [cx.x[10], cx.x[11], cx.x[12]]) as usize;
+        }
+        Trap::Exception(Exception::StoreFault) | Trap::Exception(Exception::StorePageFault) => {
+            println!("[kernel] PageFault in application, kernel killed it.");
+            run_next_app();
+        }
+        Trap::Exception(Exception::IllegalInstruction) => {
+            println!("[kernel] IllegalInstruction in application, kernel killed it.");
+            run_next_app();
+        }
+        _ => {
+            panic!(
+                "Unsupported trap {:?}, stval = {:#x}!",
+                scause.cause(),
+                stval
+            );
+        }
+    }
+    cx
+}
+
+```
+
+### os/src/trap/trap.S
+这部分是汇编的riscv的trap处理函数
+
+__alltraps：负责 “存”。把用户态的 CPU 现场（寄存器）打包，交给 Rust 处理。
+
+__restore：负责 “取”。把处理完的结果（或者初始状态）塞回寄存器，并切回用户态。
+
+```asm
+.altmacro
+.macro SAVE_GP n
+    sd x\n, \n*8(sp)
+.endm
+.macro LOAD_GP n
+    ld x\n, \n*8(sp)
+.endm
+    .section .text
+    .globl __alltraps
+    .globl __restore
+    .align 2
+__alltraps:
+    csrrw sp, sscratch, sp
+    # now sp->kernel stack, sscratch->user stack
+    # allocate a TrapContext on kernel stack
+    addi sp, sp, -34*8
+    # save general-purpose registers
+    sd x1, 1*8(sp)
+    # skip sp(x2), we will save it later
+    sd x3, 3*8(sp)
+    # skip tp(x4), application does not use it
+    # save x5~x31
+    .set n, 5
+    .rept 27
+        SAVE_GP %n
+        .set n, n+1
+    .endr
+    # we can use t0/t1/t2 freely, because they were saved on kernel stack
+    csrr t0, sstatus
+    csrr t1, sepc
+    sd t0, 32*8(sp)
+    sd t1, 33*8(sp)
+    # read user stack from sscratch and save it on the kernel stack
+    csrr t2, sscratch
+    sd t2, 2*8(sp)
+    # set input argument of trap_handler(cx: &mut TrapContext)
+    mv a0, sp
+    call trap_handler
+
+__restore:
+    # case1: start running app by __restore
+    # case2: back to U after handling trap
+    mv sp, a0
+    # now sp->kernel stack(after allocated), sscratch->user stack
+    # restore sstatus/sepc
+    ld t0, 32*8(sp)
+    ld t1, 33*8(sp)
+    ld t2, 2*8(sp)
+    csrw sstatus, t0
+    csrw sepc, t1
+    csrw sscratch, t2
+    # restore general-purpuse registers except sp/tp
+    ld x1, 1*8(sp)
+    ld x3, 3*8(sp)
+    .set n, 5
+    .rept 27
+        LOAD_GP %n
+        .set n, n+1
+    .endr
+    # release TrapContext on kernel stack
+    addi sp, sp, 34*8
+    # now sp->kernel stack, sscratch->user stack
+    csrrw sp, sscratch, sp
+    sret
+
+```
+## 示例问题
+
+
