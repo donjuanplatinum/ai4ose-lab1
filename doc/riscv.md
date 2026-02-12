@@ -71,3 +71,43 @@ RISC-V 的特权级设计简洁，但控制极其严格。
 ### 系统调用入口 (S-Mode)
 * 内核通过 `stvec` 寄存器设置中断处理程序的绝对地址。
 * 当用户态触发 `ecall`，PC 跳转至 `stvec` 所指地址。
+
+## 5. 核心控制与状态寄存器 (CSRs - Supervisor Mode)
+
+在 S-Mode 内核开发中，CSR 是控制硬件行为的“方向盘”。RISC-V 规定了专门的指令来操作它们：`csrr` (读)、`csrw` (写)、`csrrw` (读写交换)、`csrrs` (置位)、`csrrc` (清零)。
+
+### 5.1 状态与异常控制寄存器
+| CSR 名称 | 全称 | 作用与硬核细节 |
+| :--- | :--- | :--- |
+| **`sstatus`** | Supervisor Status | **核心状态寄存器**。控制全局中断使能（SIE）以及 `sret` 指令的行为。其中的 `SPP` 位决定了 `sret` 后回到哪个特权级，`SPIE` 记录了触发异常前中断是否开启。 |
+| **`stvec`** | Supervisor Trap Vector | **异常入口基址**。存储 Trap 处理程序的入口地址。支持两种模式：Direct（所有异常跳转到同一地址）或 Vectored（按异常原因跳转到不同地址）。 |
+| **`sepc`** | Supervisor Exception PC | **异常返回地址**。当 Trap 发生时，硬件自动将当前指令 PC 存入此处。`sret` 指令会读取此值并跳转回原来的执行流。 |
+| **`scause`** | Supervisor Cause | **异常原因**。记录 Trap 是因为系统调用 (`Environment Call from U-mode`)、外部中断还是非法指令等。最高位（Interrupt 位）用于区分中断和异常。 |
+| **`stval`** | Supervisor Trap Value | **异常附加信息**。如果是访存异常，此处记录出错的虚拟地址；如果是指令异常，此处可能记录指令码。 |
+
+
+
+### 5.2 内存管理与地址转换
+| CSR 名称 | 全称 | 作用与内核应用 |
+| :--- | :--- | :--- |
+| **`satp`** | Supervisor Address Translation and Protection | **页表控制寄存器**。控制 MMU 开启。包含 `MODE`（如 SV39）、`ASID`（地址空间标识符，减少 TLB 刷新）和 `PPN`（根页表的物理页号）。**写入此寄存器通常需要紧跟 `sfence.vma` 指令。** |
+
+### 5.3 优化与上下文切换神器
+| CSR 名称 | 全称 | 极底层优化场景 |
+| :--- | :--- | :--- |
+| **`sscratch`** | Supervisor Scratch | **上下文切换的桥梁**。通常在 U 态运行时存放内核栈指针。当 Trap 发生，第一条指令往往是 `csrrw sp, sscratch, sp`，瞬间完成用户栈与内核栈的物理切换，且不破坏任何通用寄存器。 |
+
+### 5.4 性能监控寄存器 (Performance Counters)
+作为优化控，你可以直接在 S-Mode 读取以下只读寄存器进行 Profile：
+* **`cycle`**: CPU 时钟周期计数器。
+* **`time`**: 实时时间计数器（与硬件频率相关）。
+* **`instret`**: 已完成执行的指令数量计数器。
+
+
+
+---
+
+### 工程师视角：CSR 操作的代价
+1. **流水线停顿 (Pipeline Stall)**: 频繁读写 CSR 会强制同步流水线。尤其是 `satp` 的写入会触发 TLB 的潜在失效。
+2. **原子性**: CSR 指令是单条原子操作。在 `nostd` 环境下，通过 `csrrs` 关闭全局中断是实现内核临界区最快的方式，开销远小于通过 Rust 标准库封装的锁。
+3. **指令选型**: 在汇编层面，如果你只需要写而不需要读旧值，使用 `csrw` 比 `csrrw` 理论上对发射逻辑更友好。

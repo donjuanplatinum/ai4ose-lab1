@@ -365,14 +365,12 @@ Address          Memory Segment             Description
            |                          |
            +--------------------------+
 ```
-
-
-这是appManager的实现
+#### 这是appManager的实现
 ```rust
 struct AppManager {
-    num_app: usize,
-    current_app: usize,
-    app_start: [usize; MAX_APP_NUM + 1],
+    num_app: usize, // app数量
+    current_app: usize, // 目前运行的app的编号
+    app_start: [usize; MAX_APP_NUM + 1], // 每个app在内存的头
 }
 ```
 
@@ -393,6 +391,7 @@ struct AppManager {
 
 流水线清空：由于指令可能已经被预取进流水线，fence.i 通常会触发流水线刷新（Pipeline Flush），确保后续执行的是新指令。
 
+#### impl
 ```rust
 impl AppManager {
     pub fn print_app_info(&self) {
@@ -439,4 +438,83 @@ impl AppManager {
         self.current_app += 1;
     }
 }
+```
+
+这里使用lazy_static宏初始化了AppManager
+
+通过_num_app函数指针指向link_app.S的符号 
+#### AppManager的初始化
+```rust
+lazy_static! {
+    static ref APP_MANAGER: UPSafeCell<AppManager> = unsafe {
+        UPSafeCell::new({
+            extern "C" {
+                fn _num_app();
+            }
+            let num_app_ptr = _num_app as usize as *const usize; //目前num_app_ptr指向_num_app
+            let num_app = num_app_ptr.read_volatile(); // 拿到app数量
+            let mut app_start: [usize; MAX_APP_NUM + 1] = [0; MAX_APP_NUM + 1]; // 初始化app_start 得到
+            let app_start_raw: &[usize] =
+                core::slice::from_raw_parts(num_app_ptr.add(1), num_app + 1); // num_app_ptr.add(1)刚好跳过了num_app的位置 然后长度为num_app+1
+            app_start[..=num_app].copy_from_slice(app_start_raw); // 这块内存根据link的脚本 存放着每个程序的头地址 所以转换为rust的类型
+            AppManager {
+                num_app,
+                current_app: 0,
+                app_start,
+            }
+        })
+    };
+}
+
+```
+
+#### run_next_app
+运行下一个APP 这里涉及到了异常处理
+```rust
+/// run next app
+pub fn run_next_app() -> ! {
+    let mut app_manager = APP_MANAGER.exclusive_access();
+    let current_app = app_manager.get_current_app();
+    unsafe {
+        app_manager.load_app(current_app); // 先将现在要运行的加载进内存
+    }
+    app_manager.move_to_next_app(); // 将AppManager里指向下一个APP
+    drop(app_manager);
+    // before this we have to drop local variables related to resources manually
+    // and release the resources
+    extern "C" {
+        fn __restore(cx_addr: usize); //  trap.S的函数
+    }
+    unsafe {
+        __restore(KERNEL_STACK.push_context(TrapContext::app_init_context(
+            APP_BASE_ADDRESS,
+            USER_STACK.get_sp(),
+        )) as *const _ as usize);
+    }
+    panic!("Unreachable in batch::run_current_app!");
+}
+
+```
+
+#### 用户栈与内核栈
+这部分是Trap触发的时候 CPU需要保存的信息
+
+```rust
+
+#[repr(align(4096))]
+struct KernelStack {
+  data: [u8; KERNEL_STACK_SIZE],
+}
+
+#[repr(align(4096))]
+struct UserStack {
+  data: [u8; USER_STACK_SIZE],
+}
+
+static KERNEL_STACK: KernelStack = KernelStack {
+  data: [0; KERNEL_STACK_SIZE],
+};
+static USER_STACK: UserStack = UserStack {
+  data: [0; USER_STACK_SIZE],
+};
 ```
