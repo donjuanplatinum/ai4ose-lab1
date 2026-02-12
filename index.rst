@@ -54,7 +54,7 @@ AI4OSE
 
 
 .. toctree::
-p   :maxdepth: 3
+   :maxdepth: 3
 
    doc/index
      

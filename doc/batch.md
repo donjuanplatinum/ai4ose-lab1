@@ -62,4 +62,255 @@ mindmap
       run_next_app: 加载程序至内存 -> 构建 TrapContext -> sret 启动
     系统调用 (Syscall)
       SYSCALL_WRITE (64): 打印字符串
-      SYSCALL_EXIT (93): 程序正常退出, 触发加载下一个 App```
+      SYSCALL_EXIT (93): 程序正常退出, 触发加载下一个 App
+```
+## 源代码分析
+### user/build.py
+这一章中多了**用户态**的应用程序user.
+
+在user中 有一个build.py 从build/app下读取所有的应用并编译
+
+```python
+import os
+
+base_address = 0x80400000
+step = 0x20000
+linker = "src/linker.ld"
+
+app_id = 0
+apps = os.listdir("build/app")
+apps.sort()
+chapter = os.getenv("CHAPTER")
+mode = os.getenv("MODE", default = "release")
+if mode == "release" :
+	mode_arg = "--release"
+else :
+    mode_arg = ""
+
+for app in apps:
+    app = app[: app.find(".")]
+    os.system(
+        "cargo rustc --bin %s %s -- -Clink-args=-Ttext=%x"
+        % (app, mode_arg, base_address + step * app_id)
+    )
+    print(
+        "[build.py] application %s start with address %s"
+        % (app, hex(base_address + step * app_id))
+    )
+    if chapter == '3':
+        app_id = app_id + 1
+
+```
+
+在user目录下有很多个user程序 因为目前阶段的操作系统我们**并没有**实现高级的**MMU**和**分页机制** 所以需要像第一章那样去**静态**的分配每个程序的位置。
+
+这里的step=0x20000是指每个程序的头距离0x20000
+```
+[  物理内存地址空间  ]
+        |
+        v
++-----------------------+ <--- 0x80200000 (Kernel Start)
+|                       |
+|      内核 (OS) 代码      |  (运行在 S-Mode)
+|                       |
++-----------------------+ <--- 0x80400000 (base_address)
+|                       |
+|   App 0 (HelloWorld)  |  <--- 链接地址: 0x80400000
+|   (Max 128KB)         |
+|                       |
++-----------------------+ <--- 0x80420000 (base + 1*step)
+|                       |
+|   App 1 (UserShell)   |  <--- 链接地址: 0x80420000
+|   (Max 128KB)         |
+|                       |
++-----------------------+ <--- 0x80440000 (base + 2*step)
+|                       |
+|   App 2 (MatrixMul)   |  <--- 链接地址: 0x80440000
+|   (Max 128KB)         |
+|                       |
++-----------------------+ <--- 0x80460000 (base + 3*step)
+|          ...          |
++-----------------------+
+|  (未使用的物理内存)     |
++-----------------------+
+```
+
+### os/build.rs与os/src/link_app.S
+```rust
+//! Building applications linker
+
+use std::fs::{read_dir, File};
+use std::io::{Result, Write};
+
+fn main() {
+    println!("cargo:rerun-if-changed=../user/src/");
+    println!("cargo:rerun-if-changed={}", TARGET_PATH);
+    insert_app_data().unwrap();
+}
+
+static TARGET_PATH: &str = "../user/build/bin/";
+
+/// get app data and build linker
+fn insert_app_data() -> Result<()> {
+    let mut f = File::create("src/link_app.S").unwrap();
+    let mut apps: Vec<_> = read_dir("../user/build/bin/")
+        .unwrap()
+        .into_iter()
+        .map(|dir_entry| {
+            let mut name_with_ext = dir_entry.unwrap().file_name().into_string().unwrap();
+            name_with_ext.drain(name_with_ext.find('.').unwrap()..name_with_ext.len());
+            name_with_ext
+        })
+        .collect();
+    apps.sort();
+
+    writeln!(
+        f,
+        r#"
+    .align 3
+    .section .data
+    .global _num_app
+_num_app:
+    .quad {}"#,
+        apps.len()
+    )?;
+
+    for i in 0..apps.len() {
+        writeln!(f, r#"    .quad app_{}_start"#, i)?;
+    }
+    writeln!(f, r#"    .quad app_{}_end"#, apps.len() - 1)?;
+
+    for (idx, app) in apps.iter().enumerate() {
+        println!("app_{}: {}", idx, app);
+        writeln!(
+            f,
+            r#"
+    .section .data
+    .global app_{0}_start
+    .global app_{0}_end
+app_{0}_start:
+    .incbin "{2}{1}.bin"
+app_{0}_end:"#,
+            idx, app, TARGET_PATH
+        )?;
+    }
+    Ok(())
+}
+
+```
+
+这个build.rs的作用是**编译用户程序** 
+
+首先它根据脚本 创建了一个link_app.S的**汇编** 将用户程序 **嵌入到内核**
+
+这是内存的布局
+```
+[  内核数据段 .data  ]
+        |
+        v
++-----------------------+ <--- 符号 _num_app
+|       App 数量 (n)     |  (.quad n)
++-----------------------+
+|    app_0_start 地址    |  (地址表项 0)
++-----------------------+
+|    app_1_start 地址    |  (地址表项 1)
++-----------------------+
+|          ...          |
++-----------------------+
+|    app_n-1_end 地址   |  (最后一个 App 的结尾地址)
++-----------------------+ <--- 符号 app_0_start
+|                       |
+|   App 0 二进制数据     |  (由 .incbin 注入)
+|                       |
++-----------------------+ <--- 符号 app_0_end / app_1_start
+|                       |
+|   App 1 二进制数据     |
+|                       |
++-----------------------+
+```
+
+我们来观察生成的link_app.S汇编 它将内存布局设置好后 **rust代码会访问里面的地址**.
+```asm
+
+    .align 3
+    .section .data
+    .global _num_app
+_num_app:
+    .quad 7
+    .quad app_0_start
+    .quad app_1_start
+    .quad app_2_start
+    .quad app_3_start
+    .quad app_4_start
+    .quad app_5_start
+    .quad app_6_start
+    .quad app_6_end
+
+    .section .data
+    .global app_0_start
+    .global app_0_end
+app_0_start:
+    .incbin "../user/build/bin/ch2b_bad_address.bin"
+app_0_end:
+
+    .section .data
+    .global app_1_start
+    .global app_1_end
+app_1_start:
+    .incbin "../user/build/bin/ch2b_bad_instructions.bin"
+app_1_end:
+
+    .section .data
+    .global app_2_start
+    .global app_2_end
+app_2_start:
+    .incbin "../user/build/bin/ch2b_bad_register.bin"
+app_2_end:
+
+    .section .data
+    .global app_3_start
+    .global app_3_end
+app_3_start:
+    .incbin "../user/build/bin/ch2b_hello_world.bin"
+app_3_end:
+
+    .section .data
+    .global app_4_start
+    .global app_4_end
+app_4_start:
+    .incbin "../user/build/bin/ch2b_power_3.bin"
+app_4_end:
+
+    .section .data
+    .global app_5_start
+    .global app_5_end
+app_5_start:
+    .incbin "../user/build/bin/ch2b_power_5.bin"
+app_5_end:
+
+    .section .data
+    .global app_6_start
+    .global app_6_end
+app_6_start:
+    .incbin "../user/build/bin/ch2b_power_7.bin"
+app_6_end:
+
+```
+
+### 用户程序
+用户程序都在user的src
+
+#### 库
+首先来看用户程序们的库函数
+
+- console.rs
+
+这个文件里实现了print和println
+
+- lang_items.rs
+
+这个文件里实现了panic_handler
+
+- lib.rs
+
+定义了库的入口点`_start`

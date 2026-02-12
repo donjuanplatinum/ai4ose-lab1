@@ -31,7 +31,7 @@ AI4OSE内核文档
    :maxdepth: 3
 
    riscv
-
+   algori
 
 每日进度文档
 
