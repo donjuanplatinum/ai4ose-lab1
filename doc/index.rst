@@ -34,7 +34,7 @@ AI4OSE内核文档
    riscv
    algori
    rust
-
+   syscall
 	      
 每日进度文档
 

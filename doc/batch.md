@@ -135,6 +135,7 @@ for app in apps:
 +-----------------------+
 ```
 
+
 ### os/build.rs与os/src/link_app.S
 ```rust
 //! Building applications linker
@@ -324,4 +325,118 @@ app_6_end:
 信号机制（Signal）：实现了类似 POSIX 的信号处理框架（sigaction, kill）。
 
 
+- syscall.rs
 
+定义了系统调用 系统调用可以看syscall.md
+
+
+### os/src/batch.rs
+这个文件是实现了**应用管理器** `AppManager`
+
+加入了应用管理器后 内存布局为
+```
+Address          Memory Segment             Description
+---------------------------------------------------------------------------
+0x80000000 +--------------------------+
+           |      OpenSBI / RustSBI   |  Firmware (M-Mode)
+0x80020000 +--------------------------+ <--- Kernel Entry
+           |      .text (RX)          |  Kernel Code (Trap Handler, etc.)
+           +--------------------------+
+           |      .rodata (R)         |  Constants, App Index Table
+           +--------------------------+
+           |      .data (RW)          |  Initialized Data
+           |  (Embedded App Binaries) |  <-- 7个.incbin 就在这里
+           +--------------------------+
+           |      .bss (RW)           |  Uninitialized Data
+           |   +------------------+   |
+           |   |   KERNEL_STACK   |   |  8KB (4096-aligned)
+           |   +------------------+   |
+           |   |    USER_STACK    |   |  8KB (4096-aligned)
+           |   +------------------+   |
+           +--------------------------+
+0x80400000 +--------------------------+ <--- APP_BASE_ADDRESS
+           |                          |
+           |     Current Running      |  Active Application Area
+           |          App             |  (Loaded by copy_from_slice)
+           |                          |
+0x80420000 +--------------------------+ <--- APP_SIZE_LIMIT Boundary
+           |                          |
+           |      Available RAM       |  Free Memory
+           |                          |
+           +--------------------------+
+```
+
+
+这是appManager的实现
+```rust
+struct AppManager {
+    num_app: usize,
+    current_app: usize,
+    app_start: [usize; MAX_APP_NUM + 1],
+}
+```
+
+
+每次使用`load_app`会情况`APP_BASE_ADDRESS`到`APP_SIZE_LIMIT`的内容 也就是从`0x80400000`到`0x80420000` 然后把 `.data`里面的程序复制过来
+
+注意 最后调用了一个`fence.i`汇编指令 它的作用是清空`I-Cache`缓存
+
+当你执行 copy_from_slice（搬运 App 代码）时，CPU 把 App 的二进制流看作是“数据”，写入的是 D-Cache。 然而，当你跳转到 0x80400000 开始执行时，CPU 会通过 I-Cache 去取指令。
+
+问题在于：D-Cache 和 I-Cache 之间通常是不直接同步的。如果不处理，CPU 拿到的可能是 I-Cache 里的旧指令（可能是上一个 App 的残余，或者是全 0），导致程序崩溃或执行错误。
+
+执行 fence.i 后，硬件会保证：
+
+写回 D-Cache：确保之前所有对存储器（内存）的写入操作对“取指操作”可见。
+
+无效化 I-Cache：清空（Invalidate）旧的指令缓存，迫使 CPU 下次取指时必须从内存（或 L2 Cache）中重新读取最新的数据。
+
+流水线清空：由于指令可能已经被预取进流水线，fence.i 通常会触发流水线刷新（Pipeline Flush），确保后续执行的是新指令。
+
+```rust
+impl AppManager {
+    pub fn print_app_info(&self) {
+        println!("[kernel] num_app = {}", self.num_app);
+        for i in 0..self.num_app {
+            println!(
+                "[kernel] app_{} [{:#x}, {:#x})",
+                i,
+                self.app_start[i],
+                self.app_start[i + 1]
+            );
+        }
+    }
+
+    unsafe fn load_app(&self, app_id: usize) {
+        if app_id >= self.num_app {
+            println!("All applications completed!");
+            use crate::board::QEMUExit;
+            crate::board::QEMU_EXIT_HANDLE.exit_success();
+        }
+        println!("[kernel] Loading app_{}", app_id);
+        // clear app area
+        core::slice::from_raw_parts_mut(APP_BASE_ADDRESS as *mut u8, APP_SIZE_LIMIT).fill(0);
+        let app_src = core::slice::from_raw_parts(
+            self.app_start[app_id] as *const u8,
+            self.app_start[app_id + 1] - self.app_start[app_id],
+        );
+        let app_dst = core::slice::from_raw_parts_mut(APP_BASE_ADDRESS as *mut u8, app_src.len());
+        app_dst.copy_from_slice(app_src);
+        // Memory fence about fetching the instruction memory
+        // It is guaranteed that a subsequent instruction fetch must
+        // observes all previous writes to the instruction memory.
+        // Therefore, fence.i must be executed after we have loaded
+        // the code of the next app into the instruction memory.
+        // See also: riscv non-priv spec chapter 3, 'Zifencei' extension.
+        asm!("fence.i");
+    }
+
+    pub fn get_current_app(&self) -> usize {
+        self.current_app
+    }
+
+    pub fn move_to_next_app(&mut self) {
+        self.current_app += 1;
+    }
+}
+```
