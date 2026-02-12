@@ -23,3 +23,19 @@ AI4OSE内核文档
    user
    machine
    batch
+
+
+知识链条文档
+   
+.. toctree::
+   :maxdepth: 3
+
+   riscv
+
+
+每日进度文档
+
+.. toctree::
+   :maxdepth: 3
+
+   days
