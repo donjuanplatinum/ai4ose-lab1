@@ -26,13 +26,16 @@ AI4OSE内核文档
 
 
 知识链条文档
+
    
 .. toctree::
    :maxdepth: 3
 
    riscv
    algori
+   rust
 
+	      
 每日进度文档
 
 .. toctree::

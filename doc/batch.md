@@ -313,31 +313,15 @@ app_6_end:
 
 - lib.rs
 
-定义了库的入口点`_start`
+定义入口点 (_start)：接管程序启动，手动清空 .bss，初始化堆分配器，并解析 argc/argv 参数。
 
-```rust
-#[no_mangle]
-#[link_section = ".text.entry"]
-pub extern "C" fn _start(argc: usize, argv: usize) -> ! {
-    clear_bss();
-    unsafe {
-        HEAP.lock()
-            .init(HEAP_SPACE.as_ptr() as usize, USER_HEAP_SIZE);
-    }
-    let mut v: Vec<&'static str> = Vec::new();
-    for i in 0..argc {
-        let str_start =
-            unsafe { ((argv + i * core::mem::size_of::<usize>()) as *const usize).read_volatile() };
-        let len = (0usize..)
-            .find(|i| unsafe { ((str_start + *i) as *const u8).read_volatile() == 0 })
-            .unwrap();
-        v.push(
-            core::str::from_utf8(unsafe {
-                core::slice::from_raw_parts(str_start as *const u8, len)
-            })
-            .unwrap(),
-        );
-    }
-    exit(main(argc, v.as_slice()));
-}
-```
+提供堆内存管理：利用 buddy_system_allocator 在用户态实现了一个 16KB 的静态堆空间，支持 Vec、Box 等 alloc 容器。
+
+封装 Syscall ABI：将内核提供的 ecall 接口包装成 Rust 风格的强类型函数（如 fork, exec, mmap, mutex 等）。
+
+支持多线程与同步：提供了用户态的互斥锁（Mutex）、信号量（Semaphore）和条件变量（Condvar）的接口。
+
+信号机制（Signal）：实现了类似 POSIX 的信号处理框架（sigaction, kill）。
+
+
+
