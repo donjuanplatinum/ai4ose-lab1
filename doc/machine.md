@@ -1,6 +1,43 @@
 # 裸机执行环境
 在本节中 我们将把`hello,wolrd`从**用户态** 搬到**内核态**
 
+## AI助手本章思维导图
+
+```
+graph TD
+    %% Root Goal
+    Goal[实现内核态 Hello World / 关机] --> Boot[1. 硬件启动与跳转流程]
+    Goal --> Memory[2. 内存空间布局与对齐]
+    Goal --> Runtime[3. Rust 运行时最小化支撑]
+
+    %% Section 1: Boot Process
+    subgraph Boot [启动链条]
+        QEMU[QEMU Virt 模拟器] -->|固化代码跳转| RustSBI[RustSBI / M-Mode]
+        RustSBI -->|Privilege Transition| S_Mode[S-Mode Kernel Entry]
+        S_Mode -->|ecall| SBI_Services[SBI 服务: 关机/输出]
+    end
+
+    %% Section 2: Memory & Linking
+    subgraph Memory [内存布局控制]
+        LD_Script[Linker Script linker.ld] -->|BASE_ADDRESS| Entry_Align[0x80200000 物理对齐]
+        LD_Script -->|Sections| Segments[.text, .data, .rodata, .bss]
+        Segments -->|Specific Header| Text_Entry[.text.entry 强制置顶]
+    end
+
+    %% Section 3: Runtime
+    subgraph Runtime [运行时初始化]
+        Entry_ASM[entry.asm 汇编引导] -->|Initial SP| Stack_Init[栈空间初始化 64KB]
+        Stack_Init -->|Jump| Rust_Main[rust_main 入口函数]
+        Rust_Main -->|Memory Safety| BSS_Clear[手动清空 .bss 段]
+        BSS_Clear -->|FFI| Extern_Symbols[extern C 访问链接脚本符号]
+    end
+
+    %% Key Dependencies
+    Text_Entry -.->|Ensures| S_Mode
+    Entry_ASM -.->|Links to| Text_Entry
+    LD_Script -.->|Provides| Extern_Symbols
+```
+## AI助手困难点与知识链条分析
 ## 裸机启动
 使用QEMU的system模拟器来模拟RISCV64计算机
 ```shell
@@ -220,6 +257,8 @@ SECTIONS
 
 `*(.text.entry)` 代表强制将所有输入文件中的`.text.entry`放在最前面 
 
+实际上这里的*是通配符 正常的格式的<file>(section) 
+
 `*(.text .text.*)`: 收集.text段的所有指令
 
 `.=ALIGN(4k)`: 将当前地址对齐到4kb
@@ -311,3 +350,55 @@ shutdown();
 }
 ```
 
+## 关联知识点
+### 相对地址和绝对地址
+#### 绝对地址
+绝对地址是指程序指令中直接硬编码了具体的内存物理（或虚拟）地址。
+
+链接阶段确定：当你设置 BASE_ADDRESS = 0x80200000 时，链接器会将所有全局符号（如 rust_main）绑定到基于此基址的固定位置。
+
+指令表现：在 RISC-V 中，访问绝对地址通常需要两步，例如加载一个全局变量：
+
+lui a0, %hi(sym) (加载符号的高 20 位)
+
+ld a0, %lo(sym)(a0) (加载低 12 位并偏移)
+
+硬核代价：如果程序被 QEMU 加载到了 0x90000000 而不是 0x80200000，所有基于绝对地址的跳转和内存访问都会指向错误的物理区域，导致 Load/Store Fault。
+
+#### 相对地址
+相对地址 (PC-Relative Address)
+相对地址不关心当前在内存的哪个位置，它只关心“目标距离我有多远”。
+
+指令表现：最典型的就是 jal (Jump and Link) 指令。其机器码中包含的是一个 Immediate Offset。
+
+PC_new = PC_current + offset
+
+工程优势：
+
+位置无关性 (PIE)：如果你的整个 entry.asm 都使用相对跳转且不访问绝对地址符号，那么这段代码可以被放置在内存任何位置运行。
+
+I-Cache 友好：相对跳转指令通常更短（如 c.j 压缩指令仅 2 字节），能显著提高指令缓存的密度和命中率。
+## 示例问题
+### 问题 1：为什么在 entry.asm 中必须先设置 sp 才能 call rust_main？Rust 的 panic_handler 在这种环境下又是如何找到栈的？
+
+栈的必要性：Rust 编译后的函数（即使是 no_mangle 的 rust_main）在生成汇编时，通常会包含函数的 Prologue（开场白），用于保存返回地址 ra 和帧指针 s0/fp。如果 sp（栈指针）是随机值，这些写内存操作会导致地址访问违规（Load/Store Fault）。
+
+Panic 机制：当代码触发 panic! 时，Rust 需要在栈上记录回溯信息（Backtrace）。在 nostd 裸机环境下，我们没有操作系统的信号处理。如果栈没初始化好就发生了 panic，CPU 会陷入死循环或触发非法的异常嵌套。
+
+硬核细节：在 RISC-V 中，sp 寄存器必须保持 16 字节对齐。如果你在汇编里手动操作 sp 而未对齐，某些涉及 fld/fsd（浮点指令）的操作会直接触发硬件异常。
+
+### 问题 2：你在链接脚本里用了 . = ALIGN(4K);。从 CPU 缓存（Cache）和页表（Page Table）的角度看，这种对齐的工程意义是什么？
+
+内存保护（PMP/MMU）：RISC-V 的物理内存保护（PMP）或未来的页表（SV39/SV48）是以页为最小单位的。.text（只读/执行）、.rodata（只读）和 .data（读写）属性完全不同。如果不进行 4K 对齐，一个页里可能既包含代码又包含数据。为了安全，你无法为这个页设置纯“只读”或纯“不可执行”属性。
+
+缓存命中优化：通过对齐，你可以确保内核的关键数据结构不会跨越两个不同的 Cache Line 或 TLB Entry。
+
+i-Cache / d-Cache 分离：代码段和数据段在物理上分离开，有助于 CPU 更有效地预取指令，减少指令缓存和数据缓存之间的冲突挤占。
+
+### 问题3: 在 clear_bss 函数中，你使用了 write_volatile。如果这里漏掉了 volatile 且开启了 cargo build --release，最坏的情况是什么？
+
+编译器“幻觉”：Rust 编译器（LLVM 后端）在进行 O3 优化时，会分析代码的语义。如果它发现你只是在循环写 0 到一个后续“看起来没被用到”的内存区域，它可能会认为这是 Dead Store，从而直接把整个循环的代码删掉。
+
+后果：由于 .bss 段包含未初始化的全局变量（在 Rust 中默认为 0），如果清空操作被优化掉，这些变量将包含加载时的随机物理内存残余。
+
+对底层的影响：如果你的内核里有一个全局的 SpinLock 状态位存在 .bss 段，而它恰好因为没清零而处于非零值，你的内核会在第一次尝试获取锁时发生死锁，且这种 bug 极难调试。
