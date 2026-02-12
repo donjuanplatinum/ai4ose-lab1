@@ -19,7 +19,8 @@ AI4OSE
 * **AI 协同 费曼学习法 (AI Synergy)** ：由 AI 在每一节的末尾自动生成高质量问题, 并由AI生成思维导图。 同时会提供建议向AI询问的常见问题 根据费曼学习法 通过您的回答由AI助手判断您的掌握程度。
 * **性能基准与AI集成 (Bench Integration)** ：使用Perf Valigrind Strace GDB criterion等工具动态的生成性能报告 并将报告结合AI大模型助手进行分析。
 * **AI可能问题分析**: 对于可能遇到的问题 使用AI对知识点网状图进行指向分析 最终将完整清晰的知识链条给予读者
-  
+* **TL;DR**: 利用TLDR思想 每一章引入一个TL;DR 在开篇一句定基调 以在文章开篇就能了解到本章的大致内容与方向
+
 技术环境
 ========
 
@@ -53,7 +54,7 @@ AI4OSE
 
 
 .. toctree::
-   :maxdepth: 3
+p   :maxdepth: 3
 
    doc/index
      
