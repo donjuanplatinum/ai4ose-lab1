@@ -256,6 +256,105 @@ pub struct TaskContext {
     s: [usize; 12],
 }
 ```
+### task.rs
+定义了任务的状态 与**TCB**
 
+```rust
+use super::TaskContext;
+#[derive(Copy, Clone)]
+pub struct TaskControlBlock { // TCB
+    pub task_status: TaskStatus, // 任务状态
+    pub task_cx: TaskContext, // 任务上下文
+}
+
+#[derive(Copy, Clone, PartialEq)]
+pub enum TaskStatus {
+    UnInit, // 未初始化
+    Ready, // 准备运行
+    Running, // 正在运行
+    Exited, // 已退出
+}
+
+```
+### mod.rs
+定义与实现了**全局的任务管理器**
+```rust
+pub struct TaskManager {
+    /// total number of tasks
+    num_app: usize, // App数量
+    /// use inner value to get mutable access
+    inner: UPSafeCell<TaskManagerInner>, // 内部实现
+}
+
+/// Inner of Task Manager
+pub struct TaskManagerInner { //内部实现
+    /// task list
+    tasks: [TaskControlBlock; MAX_APP_NUM], // 任务的数组
+    /// id of current `Running` task
+    current_task: usize, // 目前任务的idx
+}
+```
+
+全局初始化
+
+```rust
+lazy_static! {
+    /// Global variable: TASK_MANAGER
+    pub static ref TASK_MANAGER: TaskManager = {
+        let num_app = get_num_app();
+        let mut tasks = [TaskControlBlock {
+            task_cx: TaskContext::zero_init(),
+            task_status: TaskStatus::UnInit,
+        }; MAX_APP_NUM];
+        for (i, task) in tasks.iter_mut().enumerate() {
+            task.task_cx = TaskContext::goto_restore(init_app_cx(i));
+            task.task_status = TaskStatus::Ready;
+        }
+        TaskManager {
+            num_app,
+            inner: unsafe {
+                UPSafeCell::new(TaskManagerInner {
+                    tasks,
+                    current_task: 0,
+                })
+            },
+        }
+    };
+}
+
+```
+## yiled系统调用
+yield 是进程主动触发的“权力让渡”，它通过触发内核上下文切换（__switch），将 CPU 执行权从当前任务交还给调度器，从而允许其他就绪任务运行，本质上是协作式多任务的基础。
+
+流程图
+```
+App A (User Mode)          |          Kernel (Supervisor Mode)          |        App B (User Mode)
+===========================================================================================================
+  [1] 执行逻辑...                 |                                            |
+      a7 = SYS_YIELD             |                                            |
+      ecall -------------------->| [2] __alltraps (Entry.S):                   |
+                                 |     - sscratch 交换 sp (切到内核栈A)         |
+                                 |     - 压栈保存 TrapContext_A                |
+                                 |     - 调用 trap_handler(TrapContext_A)      |
+                                 |               |                            |
+                                 | [3] sys_yield (Rust):                      |
+                                 |     - 修改 TaskA 状态为 Ready               |
+                                 |     - 调用 __switch(&cx_A, &cx_B)           |
+                                 |               |                            |
+                                 | [4] __switch (Asm): <----------------------|---- [之前某时刻 Task B 暂停处]
+                                 |     - 保存 Callee-saved 至 cx_A             |
+                                 |     - 交换 sp: sp_A -> sp_B (!!!核心切换!!!) |
+                                 |     - 从 cx_B 恢复 Callee-saved             |
+                                 |     - ret (跳转至 B 的 ra 寄存器地址)        |
+                                 |               |                            |
+                                 | [5] 控制流 B 恢复:                          |
+                                 |     - 回到之前 B 调用 __switch 的下一行      |
+                                 |     - 退出 sys_yield / trap_handler         |
+                                 |     - 执行 __restore (Entry.S):             |
+                                 |       - 从内核栈B 弹出 TrapContext_B         |
+                                 |       - sret <-----------------------------|--- [6] 恢复运行 App B
+                                 |                                            |        (pc = B 的 sepc)
+===========================================================================================================
+```
 ## 示例问题
 ### 1. 为什么switch.S也就是上下文切换里没有ecall
