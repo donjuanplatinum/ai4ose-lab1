@@ -78,3 +78,78 @@ pub struct TaskContext {
 快速切换：通过极其精简的汇编指令（如 rCore 中的 __switch.S）保存和恢复上下文。
 
 硬核痛点：高频率的切换会带来 Context Switch Overhead。作为追求极致优化的工程师，你会关注切换时寄存器压栈的数量以及 L1 Cache 的刷新开销。
+
+## os/src/loader.rs
+用于将`user`程序加载到内存 区别于ch2 
+
+这是内存布局图
+```
+Address             Memory Segment              Description
+---------------------------------------------------------------------------
+0x80000000 +--------------------------+
+           |     OpenSBI / RustSBI    |  Firmware (M-Mode)
+0x80020000 +--------------------------+ <--- Kernel Entry
+           |      .text (RX)          |  OS Kernel Code
+           +--------------------------+
+           |      .rodata (R)         |  Constants & App Index Table
+           +--------------------------+
+           |      .data (RW)          |  Initialized Data
+           |  (Embedded App Binaries) |  <-- 源数据: App 0, 1, 2... 的原始镜像
+           +--------------------------+
+           |      .bss (RW)           |  Uninitialized Data
+           |  +--------------------+  |
+           |  | Task 0 Kernel Stack|  |  8KB: 存放 App 0 的 TrapContext
+           |  +--------------------+  |
+           |  | Task 1 Kernel Stack|  |  8KB: 存放 App 1 的 TrapContext
+           |  +--------------------+  |
+           |  |        ...         |  |
+           +--------------------------+
+0x80400000 +--------------------------+ <--- APP_BASE_ADDRESS (Slot 0)
+           |                          |
+           |      App 0 Run Area      |  Active Application 0
+           |      + User Stack 0      |  (Loaded from .data by load_apps)
+           |                          |
+0x80420000 +--------------------------+ <--- APP_BASE_ADDRESS + 1 * LIMIT (Slot 1)
+           |                          |
+           |      App 1 Run Area      |  Active Application 1
+           |      + User Stack 1      |  (Loaded from .data by load_apps)
+           |                          |
+0x80440000 +--------------------------+ <--- APP_BASE_ADDRESS + 2 * LIMIT (Slot 2)
+           |          ...             |
+---------------------------------------------------------------------------
+```
+
+```rust
+/// Load nth user app at
+/// [APP_BASE_ADDRESS + n * APP_SIZE_LIMIT, APP_BASE_ADDRESS + (n+1) * APP_SIZE_LIMIT).
+pub fn load_apps() {
+    extern "C" {
+        fn _num_app(); // 从汇编或ld中得到_num_app的头地址作为函数指针
+    }
+    let num_app_ptr = _num_app as usize as *const usize;
+    let num_app = get_num_app();
+    let app_start = unsafe { core::slice::from_raw_parts(num_app_ptr.add(1), num_app + 1) }; // 到这里为止都和ch2一样
+    for i in 0..num_app {
+        let base_i = get_base_i(i); // 获得第i个app的头地址
+        // 清空写0
+        (base_i..base_i + APP_SIZE_LIMIT)
+            .for_each(|addr| unsafe { (addr as *mut u8).write_volatile(0) });
+        // load app from data section to memory
+		// 从.bss段copy到base_i
+        let src = unsafe {
+            core::slice::from_raw_parts(app_start[i] as *const u8, app_start[i + 1] - app_start[i])
+        };
+        let dst = unsafe { core::slice::from_raw_parts_mut(base_i as *mut u8, src.len()) };
+        dst.copy_from_slice(src);
+    }
+    unsafe {
+        asm!("fence.i");
+    }
+}
+/// 获得应用在.data段的头地址
+fn get_base_i(app_id: usize) -> usize {
+    APP_BASE_ADDRESS + app_id * APP_SIZE_LIMIT
+}
+```
+## os/src/task/switch.rs
+
