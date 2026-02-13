@@ -44,25 +44,29 @@ App 内存镜像布局与自动化加载：
 ```
 mindmap
   root((rCore Ch2: 批处理系统))
-    特权级机制 (Privilege)
-      U-Mode (User): 受限环境, 运行 App
-      S-Mode (Supervisor): 内核环境, 掌控硬件
-      特权级切换: ecall (U->S), sret (S->U)
-    App 加载与链接
-      用户态库: 实现 _start, syscall 封装, println! 宏
-      build.rs: 编译脚本, 将 App 二进制打包进内核 .data 段
-      内存布局: 规定 App 运行的物理起始地址
-    Trap 处理 (核心)
-      TrapContext: 保存通用寄存器 + sstatus + sepc
-      __alltraps: 汇编入口, 切换 sp 到内核栈, 保存上下文
-      __restore: 汇编出口, 恢复上下文, 切换 sp 回用户栈
-      trap_handler: Rust 分发中心, 处理 Syscall/Exception
-    批处理逻辑
-      AppManager: 维护 App 数量、ID、位置信息
-      run_next_app: 加载程序至内存 -> 构建 TrapContext -> sret 启动
-    系统调用 (Syscall)
-      SYSCALL_WRITE (64): 打印字符串
-      SYSCALL_EXIT (93): 程序正常退出, 触发加载下一个 App
+    特权级切换机制
+      U-Mode: 用户程序受限执行
+      S-Mode: 内核管控权限
+      Barrier: ecall / sret 硬件边界
+      CSR: sstatus(SPP位), sepc(现场PC), stvec(入口), sscratch(换栈)
+    内存布局设计
+      Linker脚本: 静态地址分配 (base 0x80400000 + offset)
+      App隔离: 目前通过硬编码偏移实现 (128KB step)
+      内核段: .data段中的 .incbin 注入用户二进制
+      栈结构: KernelStack vs UserStack (4096对齐)
+    Trap上下文 (Context)
+      数据结构: repr(C) 保证汇编偏移一致
+      保存项: 32个通用寄存器 + sstatus + sepc
+      __alltraps: 换栈(csrrw) -> 现场封存(sd) -> 跳转Rust
+      __restore: 现场还原(ld) -> 空间释放 -> sret
+    AppManager (内核逻辑)
+      UPSafeCell: 满足Rust所有权下的内部可变性
+      load_app: memmove式拷贝 + fence.i (I-Cache同步)
+      run_next_app: 构造初始TrapContext -> __restore启动
+    系统调用 ABI
+      寄存器约定: a0-a2(参数), a7(调用号), a0(返回值)
+      SYSCALL_WRITE: 内核封装 SBI ConsolePutchar
+      SYSCALL_EXIT: 触发 AppManager 加载下一个程序
 ```
 ## 源代码分析
 ### user/build.py
@@ -740,3 +744,41 @@ __restore:
 ## 示例问题
 
 
+### ❓ 示例问题 1：为什么在 `load_app` 搬运完二进制数据后，必须手动调用 `asm!("fence.i")`？
+
+**底层分析：**
+在 RISC-V 架构中，指令缓存（I-Cache）和数据缓存（D-Cache）通常是不透明的。
+1. **数据写入：** 当内核执行 `copy_from_slice` 时，它被视为“存储（Store）”操作，App 的代码被写入 D-Cache 甚至内存。
+2. **取指执行：** 当 CPU 准备运行 App 时，它通过 I-Cache 读取指令。
+3. **冲突点：** I-Cache 此时可能还残留着上一个 App 的指令。如果不执行 `fence.i`，CPU 可能执行到旧代码或无效指令，导致 `IllegalInstruction`。
+**结论：** `fence.i` 强制同步了指令与数据流，确保内核“写”的代码对硬件“取”指令操作可见。
+
+---
+
+### ❓ 示例问题 2：`trap.S` 中 `csrrw sp, sscratch, sp` 这行指令究竟在交换什么？
+
+**底层分析：**
+这是处理特权级切换最精妙的一步。
+* **背景：** 当从 U-Mode 进入 S-Mode 时，硬件不会自动帮我们换栈。如果直接在用户栈上保存上下文，会破坏 App 的内存且不安全。
+* **关键变量：** - `sscratch`：内核提前在里面存好了 **内核栈地址**。
+    - `sp`：此时指向 **用户栈地址**。
+* **交换后：** - `sp` 变为了内核栈地址，后续的 `sd` 指令可以将现场安全地保存到内核空间。
+    - `sscratch` 变为了用户栈地址，方便后续将其读出并存入 `TrapContext` 结构体。
+
+---
+
+### ❓ 示例问题 3：`AppManager` 为什么要使用 `UPSafeCell`？
+
+**底层分析：**
+由于我们是在 `nostd` 下构建内核，且目前是单核环境。
+1. **Rust 借用检查：** `AppManager` 作为一个全局静态变量（`lazy_static`），在 Rust 的默认规则下是不允许直接修改的（获取 `&mut` 极其困难）。
+2. **Uniproc 安全限制：** `UPSafeCell` 封装了 `RefCell`，它在单核环境下通过内部可变性（Interior Mutability）解决了这一问题。它提醒我们：虽然目前没有多核竞争，但仍然需要显式地通过 `exclusive_access()` 来获取修改权，防止在同一个 Trap 处理流程中发生重入或多重借用导致的崩溃。
+
+---
+
+### ❓ 示例问题 4：为什么 `TrapContext` 必须标记为 `#[repr(C)]`？
+
+**底层分析：**
+* **内存布局确定性：** Rust 默认的结构体布局（`repr(Rust)`）是不确定的，编译器可能会为了空间效率对字段进行重排。
+* **汇编对齐：** 在 `trap.S` 中，我们通过 `1*8(sp)`、`32*8(sp)` 这种硬编码偏移量来存取寄存器。如果 Rust 改变了字段顺序，汇编代码读取到的数据就会错位。
+* **结论：** `#[repr(C)]` 强制 Rust 按照 C 语言标准排列字段，确保 Rust 结构体与汇编代码对内存空间的认知完全一致。
