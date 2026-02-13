@@ -255,6 +255,18 @@ pub struct TaskContext {
     sp: usize,
     s: [usize; 12],
 }
+
+impl TaskContext {
+	// 保存传入的sp 并将ra设置为__restore的入口
+    pub fn goto_restore(kstack_ptr: usize) -> Self {
+        extern "C" { fn __restore(); }
+        Self {
+            ra: __restore as usize,
+            sp: kstack_ptr,
+            s: [0; 12],
+        }
+    }
+}
 ```
 ### task.rs
 定义了任务的状态 与**TCB**
@@ -323,7 +335,96 @@ lazy_static! {
 }
 
 ```
-## yiled系统调用
+
+impl方法实现
+```
+stateDiagram-v2
+    [*] --> UnInit
+    
+    UnInit --> Ready: initialize
+    
+    Ready --> Running: run_as_next
+    
+    Running --> Ready: yield
+    Running --> Exited: exit
+    
+    Exited --> [*]
+```
+
+```rust
+impl TaskManager {
+    // 
+    fn run_first_task(&self) -> ! {
+	// 锁定调度器取出task0
+        let mut inner = self.inner.exclusive_access();
+        let task0 = &mut inner.tasks[0];
+        task0.task_status = TaskStatus::Running;
+        let next_task_cx_ptr = &task0.task_cx as *const TaskContext;
+        drop(inner); //释放锁
+        let mut _unused = TaskContext::zero_init(); //构造上一个任务的上下文 不过第一个任务是没有上文的
+        
+        unsafe {
+            __switch(&mut _unused as *mut TaskContext, next_task_cx_ptr);
+        }
+        panic!("unreachable in run_first_task!");
+    }
+
+    /// 把当前任务的状态设置为Ready
+    fn mark_current_suspended(&self) {
+        let mut inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        inner.tasks[current].task_status = TaskStatus::Ready;
+    }
+
+    /// 设置为退出
+    fn mark_current_exited(&self) {
+        let mut inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        inner.tasks[current].task_status = TaskStatus::Exited;
+    }
+
+	/// 找下一个运行的任务
+    fn find_next_task(&self) -> Option<usize> {
+        let inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        (current + 1..current + self.num_app + 1)
+            .map(|id| id % self.num_app)
+            .find(|id| inner.tasks[*id].task_status == TaskStatus::Ready)
+    }
+
+    /// Switch current `Running` task to the task we have found,
+    /// or there is no `Ready` task and we can exit with all applications completed
+    fn run_next_task(&self) {
+        if let Some(next) = self.find_next_task() {
+            let mut inner = self.inner.exclusive_access();
+            let current = inner.current_task;
+            inner.tasks[next].task_status = TaskStatus::Running; // 下一个设置为running
+            inner.current_task = next;  // 当前任务设置为下一个任务
+            let current_task_cx_ptr = &mut inner.tasks[current].task_cx as *mut TaskContext;
+            let next_task_cx_ptr = &inner.tasks[next].task_cx as *const TaskContext;
+            drop(inner);
+            // before this, we should drop local variables that must be dropped manually
+            unsafe {
+                __switch(current_task_cx_ptr, next_task_cx_ptr); 
+            }
+            // go back to user mode
+        } else {
+            panic!("All applications completed!");
+        }
+    }
+}
+/// 标记当前为suspend 然后跑下一个
+pub fn suspend_current_and_run_next() {
+    mark_current_suspended();
+    run_next_task();
+}
+/// 标记当前exited 然后跑下一个
+pub fn exit_current_and_run_next() {
+    mark_current_exited();
+    run_next_task();
+}
+```
+## yiled/exit系统调用
 yield 是进程主动触发的“权力让渡”，它通过触发内核上下文切换（__switch），将 CPU 执行权从当前任务交还给调度器，从而允许其他就绪任务运行，本质上是协作式多任务的基础。
 
 流程图
@@ -356,5 +457,74 @@ App A (User Mode)          |          Kernel (Supervisor Mode)          |       
                                  |                                            |        (pc = B 的 sepc)
 ===========================================================================================================
 ```
+### os/src/syscall/process.rs
+实现`sys_yield` 与`sys_exit`
+```rust
+pub fn sys_exit(exit_code: i32) -> ! {
+    trace!("[kernel] Application exited with code {}", exit_code);
+    exit_current_and_run_next(); 
+    panic!("Unreachable in sys_exit!");
+}
+
+pub fn sys_yield() -> isize {
+    trace!("kernel: sys_yield");
+    suspend_current_and_run_next();
+    0
+}
+```
+## 分时系统
+现代的任务调度算法基本都是抢占式的，它要求每个应用只能连续执行一段时间，然后内核就会将它强制性切换出去。 一般将 时间片 (Time Slice) 作为应用连续执行时长的度量单位，每个时间片可能在毫秒量级。 简单起见，我们使用 时间片轮转算法 (RR, Round-Robin) 来对应用进行调度。
+
+RISCV中 处理器维护了时钟计数器mtime 以及一个CSR mtimecmp. 若mtime超过了CSR mtimecmp 就会触发一次时钟中断
+### os/src/timer.rs
+
+```rust
+//! RISC-V timer-related functionality
+
+use crate::config::CLOCK_FREQ;
+use crate::sbi::set_timer;
+use riscv::register::time;
+
+const TICKS_PER_SEC: usize = 100;
+#[allow(dead_code)]
+const MSEC_PER_SEC: usize = 1000;
+#[allow(dead_code)]
+const MICRO_PER_SEC: usize = 1_000_000;
+
+/// 取得mtime计数器的值
+pub fn get_time() -> usize {
+    time::read()
+}
+
+/// 获取毫秒单位的计数器的值
+#[allow(dead_code)]
+pub fn get_time_ms() -> usize {
+    time::read() * MSEC_PER_SEC / CLOCK_FREQ
+}
+
+/// 获得纳秒单位的计数器的值
+#[allow(dead_code)]
+pub fn get_time_us() -> usize {
+    time::read() * MICRO_PER_SEC / CLOCK_FREQ
+}
+
+/// 调用set_timer函数设置mtimecmp
+/// 首先读取当前 mtime 的值，然后计算出 10ms 之内计数器的增量，再将 mtimecmp 设置为二者的和。 这样，10ms 之后一个 S 特权级时钟中断就会被触发。
+pub fn set_next_trigger() {
+    set_timer(get_time() + CLOCK_FREQ / TICKS_PER_SEC);
+}
+
+```
+
+### os/src/sbi.rs
+设置mtimecmp
+```rust
+/// use sbi call to set timer
+pub fn set_timer(timer: usize) {
+    sbi_call(SBI_SET_TIMER, timer, 0, 0);
+}
+```
+## gettime系统调用
 ## 示例问题
 ### 1. 为什么switch.S也就是上下文切换里没有ecall
+### 2. 在任务切换的过程中 ra sp都做了什么
