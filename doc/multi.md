@@ -1,7 +1,44 @@
 # 多道程序与分时系统
+## 思维导图
+```
+mindmap
+  root((rCore Chapter 3))
+    任务管理(Task Management)
+      主体: TCB (Task Control Block)
+        状态: Ready / Running / Exited
+        核心: TaskContext (ra, sp, s0-s11)
+      管理器: TaskManager
+        FIFO 调度策略
+        UPSafeCell 保证单核互斥访问
+    上下文切换(Dual Context)
+      TrapContext (纵向)
+        目的: U ↔ S 特权级转换
+        位置: 内核栈顶部
+        内容: 32个通用寄存器 + CSRs
+      TaskContext (横向)
+        目的: S ↔ S 任务控制流切换
+        位置: TCB 结构体
+        内容: Callee-saved 寄存器
+    多道程序机制(Loader)
+      内存布局: 多 App 驻留内存
+      隔离方式: 物理地址偏移 (Linker Script)
+      加载器: load_apps (从 .data 到指定物理地址)
+    分时抢占(Preemption)
+      触发源: 硬件计时器 (mtime / mtimecmp)
+      关键 CSR: sstatus, sie, stvec
+      时钟中断流程
+        1. set_next_trigger
+        2. suspend_current_and_run_next
+        3. __switch
+    核心汇编(The Magic)
+      __alltraps: csrrw 换栈 / 压栈
+      __restore: 弹出 Context / sret 返回
+      __switch: 交换 sp / 实现任务“灵魂互换”
+```
 ## ch2-ch3的系统演进
 
  rCore 演进：Chapter 2 -> Chapter 3 (特权级隔离至分时多任务)
+
 
 ### 1. 核心维度对比
 
@@ -913,8 +950,25 @@ Trap 进入时（从 User 到 Kernel）这是 __alltraps 的第一条指令。sp
 
 Trap 返回时（从 Kernel 到 User）这是 __restore 结尾，切换回用户态之前的关键步骤。sp指向用户栈（User Stack）。CPU 恢复了应用 A 运行时的栈环境，准备好执行 sret。sscratch指向内核栈（Kernel Stack）。内核栈指针被重新换回到“备用仓库” sscratch 中，为下一次发生的 Trap 埋下伏笔。
 ### __restore：中发生状态切换在哪一条指令？为何该指令执行之后会进入用户态？
+sret
+
+当 CPU 执行 sret 时，硬件内部会自动触发以下一系列原子操作：
+
+特权级回转 (Privilege Level Transition)： CPU 会读取 sstatus 寄存器中的 SPP (Supervisor Previous Privilege) 字段。
+
+在进入 __restore 之前，我们已经通过 ld t0, 32*8(sp) 和 csrw sstatus, t0 将 SPP 设置为了 User (0)。
+
+执行 sret 时，硬件看到 SPP=0，便会将当前的特权级从 Supervisor 切换回 User。
+
+程序计数器同步 (PC Recovery)： 硬件将 pc 指针直接设置为 sepc 寄存器中的值。
+
+我们在 __restore 中已经预先将用户程序的入口（或被中断处）加载进了 sepc。
+
+中断使能恢复： 硬件将 sstatus 中的 SPIE (Supervisor Previous Interrupt Enable) 拷贝回 SIE 位，恢复用户态下的中断响应状态
+### 从 U 态进入 S 态是哪一条指令发生的？
+ecall
 ## 示例问题
-# rCore 任务管理与上下文切换深度解析
+rCore 任务管理与上下文切换深度解析
 
 ## 1. 为什么 `switch.S` (上下文切换) 中没有 `ecall`？
 
