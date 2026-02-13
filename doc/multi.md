@@ -12,7 +12,7 @@
 | **调度触发** | App 主动退出或崩溃 | **计时器中断 (Preemption)** | 剥夺 App 的“永久占据权”，实现公平调度 |
 | **栈空间** | 单个内核栈 | **每个任务拥有独立内核栈** | 支持任务状态的持久化存储与切换 |
 
----
+
 
 ### 2. 关键机制演进
 
@@ -151,5 +151,111 @@ fn get_base_i(app_id: usize) -> usize {
     APP_BASE_ADDRESS + app_id * APP_SIZE_LIMIT
 }
 ```
-## os/src/task/switch.rs
+## os/src/task/
+这部分用于实现**任务切换**机制
 
+注意 与Trap不同 任务切换机制是**不切换特权级**的 由**内核的调度器**进行实现
+
+```
+应用 A (User)          |        内核 (Supervisor)         |       应用 B (User)
+-----------------------------|----------------------------------|-----------------------------
+                             |                                  |
+ [1] 运行中...                |                                  |
+ [2] 触发 Trap (ecall/计时器) --|--> [3] 控制流 A 进入内核         |
+                             |        (执行 trap_handler)       |
+                             |              |                   |
+                             |        [4] 调用 __switch (A -> B) |
+                             |              |                   |
+                             |   [ 暂停 A ]  |   [ 激活 B ]       |
+                             |              |                   |
+                             |              +-------------------|-- [5] 之前被暂停的控制流 B
+                             |                                  |       从 __switch 返回
+                             |                                  |              |
+                             |                                  |   [6] 执行 __restore
+                             |                                  |              |
+                             |                                  | <---- [7] sret 返回用户态
+                             |                                  |
+                             |                                  | [8] 应用 B 运行中...
+                             |                                  | [9] 触发 Trap
+                             |              +-------------------|-- [10] 控制流 B 再次进入内核
+                             |              |                   |
+                             |        [11] 调用 __switch (B -> A)
+                             |              |                   
+                             |   [ 激活 A ]  |   [ 暂停 B ]       
+                             |              |                   
+ [13] 继续运行 <---------------|-- [12] 控制流 A 从 __switch 返回
+ (App A 毫无察觉)              |        (执行 __restore)         
+-----------------------------|----------------------------------|-----------------------------
+```
+### switch.rs
+rust对`__switch`指令的封装
+
+```rust
+use super::TaskContext;
+use core::arch::global_asm;
+
+global_asm!(include_str!("switch.S"));
+// 两个参数对应a0,a1
+extern "C" {
+    /// Switch to the context of `next_task_cx_ptr`, saving the current context
+    /// in `current_task_cx_ptr`.
+    pub fn __switch(current_task_cx_ptr: *mut TaskContext, next_task_cx_ptr: *const TaskContext);
+}
+
+```
+
+### switch.S
+汇编实现
+
+内核先逐个保存`current_task_cx_ptr`中的寄存器信息 再恢复`next_task_cx_ptr`的寄存器
+```asm
+.altmacro
+.macro SAVE_SN n
+    sd s\n, (\n+2)*8(a0)
+.endm
+.macro LOAD_SN n
+    ld s\n, (\n+2)*8(a1)
+.endm
+    .section .text
+    .globl __switch
+__switch: // a0与a1是它的两个参数
+    # __switch(
+    #     current_task_cx_ptr: *mut TaskContext,
+    #     next_task_cx_ptr: *const TaskContext
+    # )
+    # save kernel stack of current task
+    sd sp, 8(a0) // 将当前栈指针存入current_task_cx_ptr.sp
+    # save ra & s0~s11 of current execution
+    sd ra, 0(a0) // 将返回地址存入current_task_cx_ptr.ra
+    .set n, 0
+    .rept 12 // 保存s0到s11
+        SAVE_SN %n
+        .set n, n + 1
+    .endr
+    # restore ra & s0~s11 of next execution
+    ld ra, 0(a1) // 恢复`next_task_cx_ptr`
+    .set n, 0
+    .rept 12
+        LOAD_SN %n
+        .set n, n + 1
+    .endr
+    # restore kernel stack of next task
+    ld sp, 8(a1)
+    ret
+
+
+```
+
+### context.rs
+保存**任务寄存器的上下文信息**
+```rust
+#[repr(C)]
+pub struct TaskContext {
+    ra: usize,
+    sp: usize,
+    s: [usize; 12],
+}
+```
+
+## 示例问题
+### 1. 为什么switch.S也就是上下文切换里没有ecall
