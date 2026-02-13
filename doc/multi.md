@@ -525,6 +525,328 @@ pub fn set_timer(timer: usize) {
 }
 ```
 ## gettime系统调用
+### os/src/syscall/process.rs
+获得当前事件 保存在ts中
+```rust
+/// get time with second and microsecond
+pub fn sys_get_time(ts: *mut TimeVal, _tz: usize) -> isize {
+    trace!("kernel: sys_get_time");
+    let us = get_time_us();
+    unsafe {
+        *ts = TimeVal {
+            sec: us / 1_000_000,
+            usec: us % 1_000_000,
+        };
+    }
+    0
+}
+```
+## 抢占式调度
+### os/src/trap/mod.rs
+新增一个分支，触发了 S 特权级时钟中断时，重新设置计时器， 调用 suspend_current_and_run_next 函数暂停当前应用并切换到下一个。
+
+
+```rust
+#[no_mangle]
+pub fn trap_handler(cx: &mut TrapContext) -> &mut TrapContext {
+    let scause = scause::read(); // get trap cause
+    let stval = stval::read(); // get extra value
+                               // trace!("into {:?}", scause.cause());
+    match scause.cause() {
+        Trap::Exception(Exception::UserEnvCall) => {
+            // jump to next instruction anyway
+            cx.sepc += 4;
+            // get system call return value
+            cx.x[10] = syscall(cx.x[17], [cx.x[10], cx.x[11], cx.x[12]]) as usize;
+        }
+        Trap::Exception(Exception::StoreFault) | Trap::Exception(Exception::StorePageFault) => {
+            println!("[kernel] PageFault in application, bad addr = {:#x}, bad instruction = {:#x}, kernel killed it.", stval, cx.sepc);
+            exit_current_and_run_next();
+        }
+        Trap::Exception(Exception::IllegalInstruction) => {
+            println!("[kernel] IllegalInstruction in application, kernel killed it.");
+            exit_current_and_run_next();
+        }
+		// 新增的分支
+        Trap::Interrupt(Interrupt::SupervisorTimer) => {
+            set_next_trigger();
+            suspend_current_and_run_next();
+        }
+        _ => {
+            panic!(
+                "Unsupported trap {:?}, stval = {:#x}!",
+                scause.cause(),
+                stval
+            );
+        }
+    }
+    cx
+}
+/// 设置sie.stie 使得S特权级的时钟中断不会被屏蔽
+pub fn enable_timer_interrupt() {
+    unsafe {
+        sie::set_stimer();
+    }
+}
+```
+## 实验3
+### 题目
+获取任务信息
+在 ch3 中，我们的系统已经能够支持多个任务分时轮流运行，我们希望引入一个新的系统调用 ``sys_trace``（ID 为 410）用来追踪当前任务系统调用的历史信息，并做对应的修改。定义如下。
+
+```
+fn sys_trace(_trace_request: usize, _id: usize, _data: usize) -> isize
+```
+调用规范：
+这个系统调用有三种功能，根据 trace_request 的值不同，执行不同的操作：
+
+如果 trace_request 为 0，则 id 应被视作 *const u8 ，表示读取当前任务 id 地址处一个字节的无符号整数值。此时应忽略 data 参数。返回值为 id 地址处的值。
+
+如果 trace_request 为 1，则 id 应被视作 *mut u8 ，表示写入 data （作为 u8，即只考虑最低位的一个字节）到该用户程序 id 地址处。返回值应为0。
+
+如果 trace_request 为 2，表示查询当前任务调用编号为 id 的系统调用的次数，返回值为这个调用次数。本次调用也计入统计 。
+
+否则，忽略其他参数，返回值为 -1。
+
+说明：
+你可能会注意到，这个调用的读写并不安全，使用不当可能导致崩溃。这是因为在下一章节实现地址空间之前，系统中缺乏隔离机制。所以我们 不要求你实现安全检查机制，只需通过测试用例即可 。
+
+你还可能注意到，这个系统调用读写本任务内存的功能并不是很有用。这是因为作业的灵感来源 syscall 主要依靠 trace 功能追踪其他任务的信息，但在本章节我们还没有进程、线程等概念，所以简化了操作，只要求追踪自身的信息。
+
+#### 解答
+为了添加一个系统调用 我们需要在os/src/syscall/mod.rs里处理
+
+这个函数是所有**系统调用的入口**。 所以应该在这里添加一个逻辑。
+
+由于trace自己也是一个**系统调用** 而加入在这里是可以正确处理trace系统调用的次数的。
+
+
+```rust
+
+pub fn syscall(syscall_id: usize, args: [usize; 3]) -> isize {
++    add_syscall_times(syscall_id); // 加入一个添加系统调用次数的call
+    match syscall_id {
+        SYSCALL_WRITE => sys_write(args[0], args[1] as *const u8, args[2]),
+        SYSCALL_EXIT => sys_exit(args[0] as i32),
+        SYSCALL_YIELD => sys_yield(),
+        SYSCALL_GET_TIME => sys_get_time(args[0] as *mut TimeVal, args[1]),
+        SYSCALL_TRACE => sys_trace(args[0], args[1], args[2]),
+        _ => panic!("Unsupported syscall_id: {}", syscall_id),
+    }
+}
+
+```
+
+然后我们需要在**TCB**结构体添加一个**全局系统调用计数**
+
+在os/src/task/task.rs中 添加**调用次数表**
+
+```rust
+#[derive(Copy, Clone)]
+pub struct TaskControlBlock {
+    /// The task status in it's lifecycle
+    pub task_status: TaskStatus,
+    /// The task context
+    pub task_cx: TaskContext,
+    /// 当前任务调用的系统调用次数
++    pub task_syscall_times: [usize;500], // 添加每个系统调用的调用次数表
+    
+}
+```
+
+在os/src/task/mod.rs中 添加相应的**初始化** 以及添加**系统调用次数**的函数
+
+```rust
+lazy_static! {
+    /// Global variable: TASK_MANAGER
+    pub static ref TASK_MANAGER: TaskManager = {
+        let num_app = get_num_app();
+        let mut tasks = [TaskControlBlock {
+            task_cx: TaskContext::zero_init(),
+            task_status: TaskStatus::UnInit,
++ 	    task_syscall_times: [0;500], //初始化添加
+        }; MAX_APP_NUM];
+        for (i, task) in tasks.iter_mut().enumerate() {
+            task.task_cx = TaskContext::goto_restore(init_app_cx(i));
+            task.task_status = TaskStatus::Ready;
+        }
+        TaskManager {
+            num_app,
+            inner: unsafe {
+                UPSafeCell::new(TaskManagerInner {
+                    tasks,
+                    current_task: 0,
+                })
+            },
+        }
+    };
+}
+
+```
+
+添加impl
+```rust
+impl TaskManager{
+// 获取次数
+	fn get_syscall_times(&self,id: usize) -> usize{
+		let inner = self.inner.exclusive_access();
+		let current_task = inner.current_task;
+		inner.tasks[current_task].task_syscall_times[id]
+    }
+	// 次数+1
+    fn add_syscall_times(&self,id: usize) {
+		let mut inner = self.inner.exclusive_access();
+		let current_task = inner.current_task;
+		inner.tasks[current_task].task_syscall_times[id] += 1;
+    }
+}
+```
+
+添加全局函数
+```rust
+/// get the syscall times
+pub fn get_syscall_times(id:usize) -> usize{
+    TASK_MANAGER.get_syscall_times(id)
+}
+
+/// add syscall times + 1
+pub fn add_syscall_times(id: usize) {
+    TASK_MANAGER.add_syscall_times(id)
+}
+
+```
+
+最后在os/src/syscall/process.rs添加实现
+
+```rust
+pub fn sys_trace(_trace_request: usize, _id: usize, _data: usize) -> isize {
+    trace!("kernel: sys_trace");
+    match _trace_request {
+	// 获取id地址的值
+	0 => {
+	    let ptr = _id as *const u8;
+	    unsafe {
+		*ptr as isize
+	    }
+	},
+	1 => {
+	    let ptr = _id as *mut u8;
+	    let val = (_data & 0xFF) as u8;
+	    unsafe {
+		*ptr = val;
+	    }
+	    0
+	},
+	2 => {
+	    get_syscall_times(_id) as isize
+	},
+	_ => {
+	    -1
+	}
+    }
+}
+
+```
+
+### 分析trap.S的__alltraps和__restore
+
+trap.S
+```asm
+.altmacro
+.macro SAVE_GP n
+    sd x\n, \n*8(sp)
+.endm
+.macro LOAD_GP n
+    ld x\n, \n*8(sp)
+.endm
+    .section .text
+    .globl __alltraps
+    .globl __restore
+    .align 2
+__alltraps:
+    csrrw sp, sscratch, sp
+    # now sp->kernel stack, sscratch->user stack
+    # allocate a TrapContext on kernel stack
+    addi sp, sp, -34*8
+    # save general-purpose registers
+    sd x1, 1*8(sp)
+    # skip sp(x2), we will save it later
+    sd x3, 3*8(sp)
+    # skip tp(x4), application does not use it
+    # save x5~x31
+    .set n, 5
+    .rept 27
+        SAVE_GP %n
+        .set n, n+1
+    .endr
+    # we can use t0/t1/t2 freely, because they were saved on kernel stack
+    csrr t0, sstatus
+    csrr t1, sepc
+    sd t0, 32*8(sp)
+    sd t1, 33*8(sp)
+    # read user stack from sscratch and save it on the kernel stack
+    csrr t2, sscratch
+    sd t2, 2*8(sp)
+    # set input argument of trap_handler(cx: &mut TrapContext)
+    mv a0, sp
+    call trap_handler
+
+__restore:
+    # now sp->kernel stack(after allocated), sscratch->user stack
+    # restore sstatus/sepc
+    ld t0, 32*8(sp)
+    ld t1, 33*8(sp)
+    ld t2, 2*8(sp)
+    csrw sstatus, t0
+    csrw sepc, t1
+    csrw sscratch, t2
+    # restore general-purpuse registers except sp/tp
+    ld x1, 1*8(sp)
+    ld x3, 3*8(sp)
+    .set n, 5
+    .rept 27
+        LOAD_GP %n
+        .set n, n+1
+    .endr
+    # release TrapContext on kernel stack
+    addi sp, sp, 34*8
+    # now sp->kernel stack, sscratch->user stack
+    csrrw sp, sscratch, sp
+    sret
+```
+
+1. 刚进入__restore时 sp代表了什么值 指出__restore的两个使用情景
+
+要搞清楚这个问题 我们重新回顾 __restore 是用在哪里的.
+
+在os/src/trap/context.rs的TsakContext的goto_restore里
+
+```rust
+#[repr(C)]
+/// task context structure containing some registers
+pub struct TaskContext {
+    /// Ret position after task switching
+    ra: usize,
+    /// Stack pointer
+    sp: usize,
+    /// s0-11 register, callee saved
+    s: [usize; 12],
+}
+
+/// Create a new task context with a trap return addr and a kernel stack pointer
+    pub fn goto_restore(kstack_ptr: usize) -> Self {
+        extern "C" {
+            fn __restore();
+        }
+        Self {
+            ra: __restore as usize,
+            sp: kstack_ptr,
+            s: [0; 12],
+        }
+    }
+```
+
+它是在
 ## 示例问题
 ### 1. 为什么switch.S也就是上下文切换里没有ecall
 ### 2. 在任务切换的过程中 ra sp都做了什么
