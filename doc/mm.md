@@ -217,25 +217,47 @@ SV39的虚拟地址布局
 +----------------------------------------------+-------+
 物理地址 (Physical Address, 56-bit)
 ```
-
-
+### 页表项
+```
+页表项 (Page Table Entry - SV39)
++-------------+----------------------------------------------+------------+---+---+---+---+---+---+---+---+
+| Reserved    |              PPN (物理页号)                   |    RSW     | D | A | G | U | X | W | R | V |
++-------------+----------------------------------------------+------------+---+---+---+---+---+---+---+---+
+|  [63:54]    |                 [53:10]                      |   [9:8]    | 7 | 6 | 5 | 4 | 3 | 2 | 1 | 0 |
+|   (10b)     |                  (44b)                       |    (2b)    |   |   |   |   |   |   |   |   |
++-------------+----------------------------------------------+------------+---+---+---+---+---+---+---+---+
+      |                            |                               |        |   |   |   |   |   |   |   |
+      v                            v                               v        |   |   |   |   |   |   |   +-- 有效位 (Valid)
+   保留位                     指向物理页帧                      内核保留位   |   |   |   |   |   |   +------ 读 (Read)
+ (必须为0)                    (Physical Page)                  (Software)   |   |   |   |   |   +---------- 写 (Write)
+                                                                            |   |   |   |   +-------------- 执行 (Execute)
+                                                                            |   |   |   +------------------ 用户态 (User)
+                                                                            |   |   +---------------------- 全局 (Global)
+                                                                            |   +-------------------------- 访问 (Accessed)
+                                                                            +------------------------------ 脏页 (Dirty)
+```
+	
+### 物理页帧管理器
+如果说MMU用于**翻译** 那么物理页帧管理器负责**初始化**和**分配** 页表项
 
 ## 代码实现
 有了 刚才的抽象 我们可以立马的进行代码阅读
 
 ### os/src/mm/address.rs
 首先是抽象
+
+注意 地址 = 页号(高44)+偏移(低12)
 ```rust
-/// physical address
+/// 物理地址PA
 #[derive(Copy, Clone, Ord, PartialOrd, Eq, PartialEq)]
 pub struct PhysAddr(pub usize);
-/// virtual address
+/// 虚拟地址VA
 #[derive(Copy, Clone, Ord, PartialOrd, Eq, PartialEq)]
 pub struct VirtAddr(pub usize);
-/// physical page number
+/// 物理页号PPN
 #[derive(Copy, Clone, Ord, PartialOrd, Eq, PartialEq)]
 pub struct PhysPageNum(pub usize);
-/// virtual page number
+/// 虚拟页号PPN
 #[derive(Copy, Clone, Ord, PartialOrd, Eq, PartialEq)]
 pub struct VirtPageNum(pub usize);
 
