@@ -1,0 +1,698 @@
+diff --git a/easy-fs/src/efs.rs b/easy-fs/src/efs.rs
+index 202b9eb..bdf77f6 100644
+--- a/easy-fs/src/efs.rs
++++ b/easy-fs/src/efs.rs
+@@ -20,6 +20,24 @@ pub struct EasyFileSystem {
+ type DataBlock = [u8; BLOCK_SZ];
+ /// An easy fs over a block device
+ impl EasyFileSystem {
++    /// dealloc
++    pub fn dealloc_inode(&mut self, inode_id: u32) {
++        let (block_id, block_offset) = self.get_disk_inode_pos(inode_id);
++        get_block_cache(block_id as usize, Arc::clone(&self.block_device))
++            .lock()
++            .modify(block_offset, |disk_inode: &mut DiskInode| {
++                disk_inode.initialize(DiskInodeType::File); 
++            });
++
++        self.inode_bitmap.dealloc(&self.block_device, inode_id as usize);
++    }
++    /// get_disk_inode_id
++    pub fn get_disk_inode_id(&self, block_id: u32, block_offset: usize) -> u32 {
++        let inode_size = core::mem::size_of::<DiskInode>();
++        let inodes_per_block = (BLOCK_SZ / inode_size) as u32;
++        (block_id - self.inode_area_start_block) * inodes_per_block 
++            + (block_offset / inode_size) as u32
++    }
+     /// A data block of block size
+     pub fn create(
+         block_device: Arc<dyn BlockDevice>,
+diff --git a/easy-fs/src/layout.rs b/easy-fs/src/layout.rs
+index 0a3ac79..4cbed00 100644
+--- a/easy-fs/src/layout.rs
++++ b/easy-fs/src/layout.rs
+@@ -85,6 +85,7 @@ pub struct DiskInode {
+     pub direct: [u32; INODE_DIRECT_COUNT],
+     pub indirect1: u32,
+     pub indirect2: u32,
++    pub nlink: u32,
+     type_: DiskInodeType,
+ }
+ 
+diff --git a/easy-fs/src/vfs.rs b/easy-fs/src/vfs.rs
+index 9908385..ee9437b 100644
+--- a/easy-fs/src/vfs.rs
++++ b/easy-fs/src/vfs.rs
+@@ -15,6 +15,108 @@ pub struct Inode {
+ }
+ 
+ impl Inode {
++    /// remove entry
++    pub fn remove_entry(&self, name: &str) {
++        self.modify_disk_inode(|disk_inode| {
++            let file_count = (disk_inode.size as usize) / DIRENT_SZ;
++            let mut dirent = DirEntry::empty();
++            let mut target_index = None;
++
++            
++            for i in 0..file_count {
++                disk_inode.read_at(i * DIRENT_SZ, dirent.as_bytes_mut(), &self.block_device);
++                if dirent.name() == name {
++                    target_index = Some(i);
++                    break;
++                }
++            }
++
++            if let Some(idx) = target_index {
++                
++                if idx != file_count - 1 {
++                    let mut last_dirent = DirEntry::empty();
++                    disk_inode.read_at((file_count - 1) * DIRENT_SZ, last_dirent.as_bytes_mut(), &self.block_device);
++                    disk_inode.write_at(idx * DIRENT_SZ, last_dirent.as_bytes(), &self.block_device);
++                }
++                
++                disk_inode.size -= DIRENT_SZ as u32;
++                
++            }
++        });
++    }
++    ///unlink
++    pub fn unlink(&self, name: &str) -> isize {
++        let mut fs = self.fs.lock();
++        let root_inner = self.modify_disk_inode(|disk_inode| {
++            assert!(disk_inode.is_dir());
++            
++            self.find_inode_id(name, disk_inode)
++        });
++
++        if let Some(inode_id) = root_inner {
++            let (block_id, block_offset) = fs.get_disk_inode_pos(inode_id);
++            let mut is_empty = false;
++
++            
++            get_block_cache(block_id as usize, Arc::clone(&self.block_device))
++                .lock()
++                .modify(block_offset, |target_inode: &mut DiskInode| {
++                    target_inode.nlink -= 1;
++                    if target_inode.nlink == 0 {
++                        is_empty = true;
++                    }
++                });
++
++            
++            if is_empty {
++            
++                let temp_inode = Inode::new(block_id as u32, block_offset, self.fs.clone(), self.block_device.clone());
++                temp_inode.clear(); 
++                fs.dealloc_inode(inode_id);
++            }
++
++            self.remove_entry(name); 
++            
++            block_cache_sync_all();
++            0
++        } else {
++            -1
++        }
++    }
++    /// get_inode_id
++    pub fn get_inode_id(&self) -> u32 {
++        let fs = self.fs.lock();
++        fs.get_disk_inode_id(self.block_id as u32, self.block_offset)
++    }
++    /// link
++    pub fn link(&self, new_name: &str, old_inode: &Arc<Inode>) -> isize {
++        let mut fs = self.fs.lock();
++        
++        
++        old_inode.modify_disk_inode(|disk_inode| {
++            disk_inode.nlink += 1;
++        });
++
++        
++        let old_inode_id = old_inode.get_inode_id();
++        self.modify_disk_inode(|root_inode| {
++            
++            let file_count = (root_inode.size as usize) / DIRENT_SZ;
++            let new_size = (file_count + 1) * DIRENT_SZ;
++            
++            self.increase_size(new_size as u32, root_inode, &mut fs);
++            
++            let dirent = DirEntry::new(new_name, old_inode_id);
++            root_inode.write_at(
++                file_count * DIRENT_SZ,
++                dirent.as_bytes(),
++                &self.block_device,
++            );
++        });
++        
++        block_cache_sync_all();
++        0
++    }
+     /// Create a vfs inode
+     pub fn new(
+         block_id: u32,
+@@ -30,7 +132,7 @@ impl Inode {
+         }
+     }
+     /// Call a function over a disk inode to read it
+-    fn read_disk_inode<V>(&self, f: impl FnOnce(&DiskInode) -> V) -> V {
++    pub fn read_disk_inode<V>(&self, f: impl FnOnce(&DiskInode) -> V) -> V {
+         get_block_cache(self.block_id, Arc::clone(&self.block_device))
+             .lock()
+             .read(self.block_offset, f)
+diff --git a/os/Cargo.toml b/os/Cargo.toml
+index 55be815..f91ec89 100644
+--- a/os/Cargo.toml
++++ b/os/Cargo.toml
+@@ -11,8 +11,8 @@ bitflags = "1.2.1"
+ buddy_system_allocator = "0.6"
+ lazy_static = { version = "1.4.0", features = ["spin_no_std"] }
+ log = "0.4"
+-riscv = { git = "https://github.com/rcore-os/riscv", features = ["inline-asm"] }
++riscv = { git = "https://gitee.com/rcore-os/riscv", features = ["inline-asm"] }
+ xmas-elf = "0.7.0"
+-virtio-drivers = { git = "https://github.com/rcore-os/virtio-drivers", rev = "4ee80e5" }
++virtio-drivers = { git = "https://gitee.com/rcore-os/virtio-drivers", rev = "4ee80e5" }
+ easy-fs = { path = "../easy-fs" }
+ 
+diff --git a/os/src/config.rs b/os/src/config.rs
+index 0dade9a..e9938f7 100644
+--- a/os/src/config.rs
++++ b/os/src/config.rs
+@@ -23,3 +23,8 @@ pub const CLOCK_FREQ: usize = 12500000;
+ pub const MEMORY_END: usize = 0x88000000;
+ /// The base address of control registers in Virtio_Block device
+ pub const MMIO: &[(usize, usize)] = &[(0x10001000, 0x1000)];
++
++/// 默认优先级
++pub const DEFAULT_PRIO: usize = 16;
++/// 大stride常数
++pub const BIG_STRIDE: usize = 0x7FFF_FFF;
+diff --git a/os/src/fs/inode.rs b/os/src/fs/inode.rs
+index 9953942..db66005 100644
+--- a/os/src/fs/inode.rs
++++ b/os/src/fs/inode.rs
+@@ -124,8 +124,25 @@ pub fn open_file(name: &str, flags: OpenFlags) -> Option<Arc<OSInode>> {
+         })
+     }
+ }
+-
++use crate::fs::{Stat,StatMode};
+ impl File for OSInode {
++    fn get_stat(&self, st: &mut Stat) -> isize {
++        let inner = self.inner.exclusive_access();
++        
++        st.ino = inner.inode.get_inode_id() as u64;
++        st.dev = 0;
++        
++        
++        inner.inode.read_disk_inode(|disk_inode| {
++            st.nlink = disk_inode.nlink;
++            st.mode = if disk_inode.is_dir() {
++                StatMode::DIR
++            } else {
++                StatMode::FILE
++            };
++        });
++        0
++    }
+     fn readable(&self) -> bool {
+         self.readable
+     }
+@@ -157,3 +174,23 @@ impl File for OSInode {
+         total_write_size
+     }
+ }
++/// linkat
++pub fn linkat(old_path: &str, new_path: &str) -> isize {
++    let root_inode = ROOT_INODE.clone();
++
++    let old_inode = match root_inode.find(old_path) {
++        Some(inode) => inode,
++        None => return -1,
++    };
++
++    if root_inode.find(new_path).is_some() {
++        return -1;
++    }
++
++    root_inode.link(new_path, &old_inode)
++}
++///unlink
++pub fn unlinkat(path: &str) -> isize {
++    let root_inode = ROOT_INODE.clone();
++    root_inode.unlink(path)
++}
+diff --git a/os/src/fs/mod.rs b/os/src/fs/mod.rs
+index 4c99179..646a126 100644
+--- a/os/src/fs/mod.rs
++++ b/os/src/fs/mod.rs
+@@ -15,6 +15,8 @@ pub trait File: Send + Sync {
+     fn read(&self, buf: UserBuffer) -> usize;
+     /// write to the file from buf, return the number of bytes written
+     fn write(&self, buf: UserBuffer) -> usize;
++    /// stat
++    fn get_stat(&self,_st: &mut Stat) -> isize {-1}
+ }
+ 
+ /// The stat of a inode
+@@ -48,3 +50,4 @@ bitflags! {
+ 
+ pub use inode::{list_apps, open_file, OSInode, OpenFlags};
+ pub use stdio::{Stdin, Stdout};
++pub use inode::{linkat,unlinkat};
+diff --git a/os/src/mm/.#memory_set.rs b/os/src/mm/.#memory_set.rs
+new file mode 120000
+index 0000000..c3a7516
+--- /dev/null
++++ b/os/src/mm/.#memory_set.rs
+@@ -0,0 +1 @@
++donjuan@gentoo.28492:1771061476
+\ No newline at end of file
+diff --git a/os/src/mm/memory_set.rs b/os/src/mm/memory_set.rs
+index a5a9ede..d3c511a 100644
+--- a/os/src/mm/memory_set.rs
++++ b/os/src/mm/memory_set.rs
+@@ -54,6 +54,43 @@ impl MemorySet {
+     pub fn token(&self) -> usize {
+         self.page_table.token()
+     }
++    /// 检查是否有重叠
++    /// 在分配新的内存区域前 必须确保请求的地址范围(start..end)没有与目前的区域重叠
++    
++    pub fn check_overlap(&self, start_va: VirtAddr, end_va: VirtAddr) -> bool {
++        let new_start_vpn = start_va.floor(); // 向下取整到最近的页起始VPN
++        let new_end_vpn = end_va.ceil(); // 向上取整到最近的页结尾
++        
++        self.areas.iter().any(|area| {
++	    // NOT(要分配的结尾 < 目前区域的头 或 要分配的头 > 目前区域的尾)
++            !(new_end_vpn <= area.vpn_range.get_start() || new_start_vpn >= area.vpn_range.get_end())
++		
++        })
++    }
++    /// munmap
++    /// 删除区域
++    pub fn remove_framed_area(&mut self, start_va: VirtAddr, end_va: VirtAddr) -> isize {
++        let start_vpn = start_va.floor();
++        let end_vpn = end_va.ceil();
++
++	// 精确匹配
++        let area_idx = self.areas.iter().position(|area| {
++            area.vpn_range.get_start() == start_vpn && area.vpn_range.get_end() == end_vpn
++        });
++
++        if let Some(idx) = area_idx {
++            self.areas.remove(idx);
++            let mut vpn = start_vpn;
++            while vpn < end_vpn {
++                self.page_table.unmap(vpn);
++                vpn.step();
++            }
++            0
++        } else {
++            // 区间不匹配
++            -1
++        }
++    }
+     /// Assume that no conflicts.
+     pub fn insert_framed_area(
+         &mut self,
+diff --git a/os/src/syscall/fs.rs b/os/src/syscall/fs.rs
+index 864d6ba..e75ace0 100644
+--- a/os/src/syscall/fs.rs
++++ b/os/src/syscall/fs.rs
+@@ -85,19 +85,32 @@ pub fn sys_fstat(_fd: usize, _st: *mut Stat) -> isize {
+ }
+ 
+ /// YOUR JOB: Implement linkat.
+-pub fn sys_linkat(_old_name: *const u8, _new_name: *const u8) -> isize {
++pub fn sys_linkat(old_name: *const u8, new_name: *const u8) -> isize {
+     trace!(
+         "kernel:pid[{}] sys_linkat NOT IMPLEMENTED",
+         current_task().unwrap().pid.0
+     );
+-    -1
++    let token = current_user_token();
++    let old_path = translated_str(token, old_name);
++    let new_path = translated_str(token, new_name);
++
++    if old_path == new_path {
++        return -1;
++    }
++
++    // 直接调用 fs 模块封装好的业务逻辑
++    crate::fs::linkat(old_path.as_str(), new_path.as_str())
+ }
+ 
+ /// YOUR JOB: Implement unlinkat.
+-pub fn sys_unlinkat(_name: *const u8) -> isize {
++pub fn sys_unlinkat(name: *const u8) -> isize {
+     trace!(
+         "kernel:pid[{}] sys_unlinkat NOT IMPLEMENTED",
+         current_task().unwrap().pid.0
+     );
+-    -1
++    let token = current_user_token();
++    let path_str = translated_str(token, name);
++    
++    
++    crate::fs::unlinkat(path_str.as_str())
+ }
+diff --git a/os/src/syscall/process.rs b/os/src/syscall/process.rs
+index 959c589..c6db39c 100644
+--- a/os/src/syscall/process.rs
++++ b/os/src/syscall/process.rs
+@@ -102,33 +102,104 @@ pub fn sys_waitpid(pid: isize, exit_code_ptr: *mut i32) -> isize {
+     // ---- release current PCB automatically
+ }
+ 
++use crate::timer::get_time;
++use crate::config::{CLOCK_FREQ,PAGE_SIZE};
++use crate::mm::VirtAddr;
++use crate::mm::MapPermission;
+ /// YOUR JOB: get time with second and microsecond
+ /// HINT: You might reimplement it with virtual memory management.
+ /// HINT: What if [`TimeVal`] is splitted by two pages ?
+-pub fn sys_get_time(_ts: *mut TimeVal, _tz: usize) -> isize {
+-    trace!(
+-        "kernel:pid[{}] sys_get_time NOT IMPLEMENTED",
+-        current_task().unwrap().pid.0
+-    );
+-    -1
++pub fn sys_get_time(ts: *mut TimeVal, _tz: usize) -> isize {
++    let task = current_task().unwrap();
++    
++    let inner = task.inner_exclusive_access();
++    let ticks = get_time();
++    let sec = ticks / CLOCK_FREQ;
++    let usec = (ticks % CLOCK_FREQ) * 1_000_000 / CLOCK_FREQ;
++    
++    let time_val = TimeVal { sec, usec };
++
++    let src = unsafe {
++        core::slice::from_raw_parts(
++            &time_val as *const _ as *const u8,
++            core::mem::size_of::<TimeVal>(),
++        )
++    };
++
++    let mut head = 0;
++    let len = core::mem::size_of::<TimeVal>();
++    let start_va = ts as usize;
++
++    while head < len {
++        let va = VirtAddr::from(start_va + head);
++        let vpn = va.floor();
++        
++        
++        let pte = match inner.memory_set.translate(vpn) {
++            Some(pte) if pte.is_valid() && pte.readable() => pte,
++            _ => return -1, 
++        };
++        
++        let ppn = pte.ppn();
++        let page_offset = va.page_offset();
++        let chunk_len = (PAGE_SIZE - page_offset).min(len - head);
++        
++        let dst = &mut ppn.get_bytes_array()[page_offset..page_offset + chunk_len];
++        dst.copy_from_slice(&src[head..head + chunk_len]);
++        
++        head += chunk_len;
++    }
++    0
+ }
+ 
+ /// YOUR JOB: Implement mmap.
+-pub fn sys_mmap(_start: usize, _len: usize, _port: usize) -> isize {
+-    trace!(
+-        "kernel:pid[{}] sys_mmap NOT IMPLEMENTED",
+-        current_task().unwrap().pid.0
+-    );
+-    -1
++pub fn sys_mmap(start: usize, len: usize, port: usize) -> isize {
++    if start % PAGE_SIZE != 0 { return -1; }
++    if port & !0x7 != 0 || port == 0 { return -1; }
++
++    let task = current_task().unwrap();
++    let mut inner = task.inner_exclusive_access();
++    
++    let start_va = VirtAddr::from(start);
++    let end_va = VirtAddr::from(start + len);
++
++    if inner.memory_set.check_overlap(start_va, end_va) {
++        return -1;
++    }
++
++    
++    let mut permission = MapPermission::U;
++    if port & 0x1 != 0 { permission |= MapPermission::R; }
++    if port & 0x2 != 0 { permission |= MapPermission::W; }
++    if port & 0x4 != 0 { permission |= MapPermission::X; }
++
++    inner.memory_set.insert_framed_area(start_va, end_va, permission);
++
++    0
+ }
+ 
+ /// YOUR JOB: Implement munmap.
+-pub fn sys_munmap(_start: usize, _len: usize) -> isize {
+-    trace!(
+-        "kernel:pid[{}] sys_munmap NOT IMPLEMENTED",
+-        current_task().unwrap().pid.0
+-    );
+-    -1
++pub fn sys_munmap(start: usize, len: usize) -> isize {
++    
++    if start % PAGE_SIZE != 0 {
++        return -1;
++    }
++    let task = current_task().unwrap();
++    let mut inner = task.inner_exclusive_access();
++    let start_va = VirtAddr::from(start);
++    let end_va = VirtAddr::from(start + len);
++
++
++    let result = inner.memory_set.remove_framed_area(start_va, end_va);
++
++
++    if result == 0 {
++	
++        0
++    } else {
++	
++        -1
++    }
+ }
+ 
+ /// change data segment size
+@@ -143,19 +214,45 @@ pub fn sys_sbrk(size: i32) -> isize {
+ 
+ /// YOUR JOB: Implement spawn.
+ /// HINT: fork + exec =/= spawn
+-pub fn sys_spawn(_path: *const u8) -> isize {
+-    trace!(
+-        "kernel:pid[{}] sys_spawn NOT IMPLEMENTED",
+-        current_task().unwrap().pid.0
+-    );
+-    -1
+-}
++pub fn sys_spawn(path: *const u8) -> isize {
++    trace!("kernel:pid[{}] sys_spawn", current_task().unwrap().pid.0);
++    let token = current_user_token();
++    let path_str = translated_str(token, path);
++    trace!("kernel:pid[{}] sys_spawn path: {}", current_task().unwrap().pid.0, path_str);
+ 
++    // 1. 从根目录打开文件
++    if let Some(app_inode) = open_file(path_str.as_str(), OpenFlags::RDONLY) {
++        // 2. 读取 ELF 数据
++        // 注意：这里使用 Vec 存储在堆上，避免内核栈溢出
++        let data = app_inode.read_all();
++        
++        // 3. 获取当前进程（作为父进程）
++        let current_task = current_task().unwrap();
++        
++        // 4. 创建新进程
++        // 假设你的 TCB::spawn 接收 &Arc<TaskControlBlock> 和 ELF 数据
++        let new_task = current_task.spawn(data.as_slice());
++        
++        // 5. 获取 PID 并加入调度器
++        let pid = new_task.pid.0;
++        add_task(new_task);
++        
++        pid as isize
++    } else {
++        trace!("sys_spawn: file not found");
++        -1
++    }
++}
++use crate::config::BIG_STRIDE;
+ // YOUR JOB: Set task priority.
+-pub fn sys_set_priority(_prio: isize) -> isize {
+-    trace!(
+-        "kernel:pid[{}] sys_set_priority NOT IMPLEMENTED",
+-        current_task().unwrap().pid.0
+-    );
+-    -1
++pub fn sys_set_priority(priority: isize) -> isize {
++    if priority < 2 {
++        return -1;
++    }
++    let priority = priority as usize;
++    let task = current_task().unwrap();
++    let mut inner = task.inner_exclusive_access();
++    inner.priority = priority;
++    inner.pass = BIG_STRIDE / priority;
++    priority as isize
+ }
+diff --git a/os/src/task/manager.rs b/os/src/task/manager.rs
+index 99393a4..34e5305 100644
+--- a/os/src/task/manager.rs
++++ b/os/src/task/manager.rs
+@@ -23,7 +23,28 @@ impl TaskManager {
+     }
+     /// Take a process out of the ready queue
+     pub fn fetch(&mut self) -> Option<Arc<TaskControlBlock>> {
+-        self.ready_queue.pop_front()
++        if self.ready_queue.is_empty() {
++            return None;
++        }
++        let mut min_stride_idx = 0;
++        let mut min_stride = self.ready_queue[0].inner_exclusive_access().stride;
++
++        for i in 1..self.ready_queue.len() {
++            let current_stride = self.ready_queue[i].inner_exclusive_access().stride;
++            if current_stride < min_stride {
++                min_stride = current_stride;
++                min_stride_idx = i;
++            }
++        }
++
++        let task = self.ready_queue.remove(min_stride_idx).unwrap();
++        
++
++        {
++            let mut inner = task.inner_exclusive_access();
++            inner.stride += inner.pass;
++        }
++        Some(task)
+     }
+ }
+ 
+diff --git a/os/src/task/task.rs b/os/src/task/task.rs
+index ff5b581..48191b7 100644
+--- a/os/src/task/task.rs
++++ b/os/src/task/task.rs
+@@ -1,8 +1,11 @@
+ //! Types related to task management & Functions for completely changing TCB
+ use super::TaskContext;
+ use super::{kstack_alloc, pid_alloc, KernelStack, PidHandle};
+-use crate::config::TRAP_CONTEXT_BASE;
++
++
+ use crate::fs::{File, Stdin, Stdout};
++
++use crate::config::{TRAP_CONTEXT_BASE,BIG_STRIDE};
+ use crate::mm::{MemorySet, PhysPageNum, VirtAddr, KERNEL_SPACE};
+ use crate::sync::UPSafeCell;
+ use crate::trap::{trap_handler, TrapContext};
+@@ -36,6 +39,66 @@ impl TaskControlBlock {
+         let inner = self.inner_exclusive_access();
+         inner.memory_set.token()
+     }
++    ///spawn
++    pub fn spawn(self: &Arc<Self>, elf_data: &[u8]) -> Arc<Self> {
++            let (memory_set, user_sp, entry_point) = MemorySet::from_elf(elf_data);
++            let trap_cx_ppn = memory_set
++                .translate(VirtAddr::from(TRAP_CONTEXT_BASE).into())
++                .unwrap()
++                .ppn();
++
++            let pid_handle = pid_alloc();
++            let kernel_stack = kstack_alloc();
++            let kernel_stack_top = kernel_stack.get_top();
++
++            let task_control_block = Arc::new(TaskControlBlock {
++                pid: pid_handle,
++                kernel_stack,
++                inner: unsafe {
++                    UPSafeCell::new(TaskControlBlockInner {
++                        trap_cx_ppn,
++                        base_size: user_sp,
++                        task_cx: TaskContext::goto_trap_return(kernel_stack_top),
++                        task_status: TaskStatus::Ready,
++                        memory_set,
++                        parent: Some(Arc::downgrade(self)),
++                        children: Vec::new(),
++                        exit_code: 0,
++			fd_table: vec![
++                Some(Arc::new(Stdin)),  // fd 0
++                Some(Arc::new(Stdout)), // fd 1
++                Some(Arc::new(Stdout)), // fd 2
++            ],
++                        heap_bottom: user_sp,
++                        program_brk: user_sp,
++                        priority: 16,
++                        stride: 0,
++                        pass: BIG_STRIDE / 16,
++                    })
++                },
++            });
++
++
++        self.inner_exclusive_access().children.push(Arc::clone(&task_control_block));
++
++
++        {
++
++            let inner = task_control_block.inner_exclusive_access();
++            let trap_cx = inner.get_trap_cx();
++            *trap_cx = TrapContext::app_init_context(
++                entry_point,
++                user_sp,
++                KERNEL_SPACE.exclusive_access().token(),
++                kernel_stack_top,
++                trap_handler as usize,
++            );
++
++        }
++
++
++        task_control_block
++    }
+ }
+ 
+ pub struct TaskControlBlockInner {
+@@ -71,6 +134,12 @@ pub struct TaskControlBlockInner {
+ 
+     /// Program break
+     pub program_brk: usize,
++    /// priority
++    pub priority: usize,
++    /// stride
++    pub stride: usize,
++    /// pass
++    pub pass: usize,
+ }
+ 
+ impl TaskControlBlockInner {
+@@ -135,6 +204,9 @@ impl TaskControlBlock {
+                     ],
+                     heap_bottom: user_sp,
+                     program_brk: user_sp,
++		    priority: 16,
++		    stride: 0,
++		    pass: BIG_STRIDE / 16,
+                 })
+             },
+         };
+@@ -216,6 +288,9 @@ impl TaskControlBlock {
+                     fd_table: new_fd_table,
+                     heap_bottom: parent_inner.heap_bottom,
+                     program_brk: parent_inner.program_brk,
++		    priority: parent_inner.priority,
++		    stride: parent_inner.stride,
++		    pass: parent_inner.pass,
+                 })
+             },
+         });
