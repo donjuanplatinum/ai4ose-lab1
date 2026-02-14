@@ -4,14 +4,14 @@
 
 在内核开发中，除了标准的算术逻辑指令，以下指令是构建内核骨架的核心：
 
-| 指令 | 全称 | 作用 | 内核应用场景 |
-| :--- | :--- | :--- | :--- |
-| `la rd, symbol` | Load Address | 加载符号地址 | 获取全局变量、跳转入口的绝对/相对地址 |
-| `auipc rd, imm` | Add Upper Immediate to PC | `rd = PC + (imm << 12)` | 实现 PC 相关（Position Independent）的代码寻址 |
-| `jalr rd, offset(rs1)` | Jump and Link Register | 跳转并保存返回地址 | 配合 `auipc` 实现远距离跨度（±2GB）的函数调用 |
-| `ecall` | Environment Call | 触发异常进入更高特权级 | 用户态请求内核态，或内核态请求 SBI (M-Mode) |
-| `mret / sret` | Machine/Supervisor Ret | 从异常处理程序返回 | 实现特权级切换的关键：从 M 回到 S，或从 S 回到 U |
-| `csrrw rd, csr, rs1` | CSR Read Write | 交换寄存器与 CSR 的值 | 读写 `satp` (页表)、`stvec` (中断向量表) 等 |
+| 指令                   | 全称                      | 作用                    | 内核应用场景                                     |
+|:-----------------------|:--------------------------|:------------------------|:-------------------------------------------------|
+| `la rd, symbol`        | Load Address              | 加载符号地址            | 获取全局变量、跳转入口的绝对/相对地址            |
+| `auipc rd, imm`        | Add Upper Immediate to PC | `rd = PC + (imm << 12)` | 实现 PC 相关（Position Independent）的代码寻址   |
+| `jalr rd, offset(rs1)` | Jump and Link Register    | 跳转并保存返回地址      | 配合 `auipc` 实现远距离跨度（±2GB）的函数调用   |
+| `ecall`                | Environment Call          | 触发异常进入更高特权级  | 用户态请求内核态，或内核态请求 SBI (M-Mode)      |
+| `mret / sret`          | Machine/Supervisor Ret    | 从异常处理程序返回      | 实现特权级切换的关键：从 M 回到 S，或从 S 回到 U |
+| `csrrw rd, csr, rs1`   | CSR Read Write            | 交换寄存器与 CSR 的值   | 读写 `satp` (页表)、`stvec` (中断向量表) 等      |
 
 ---
 
@@ -88,9 +88,10 @@ RISC-V 的特权级设计简洁，但控制极其严格。
 
 
 ### 5.2 内存管理与地址转换
-| CSR 名称 | 全称 | 作用与内核应用 |
-| :--- | :--- | :--- |
+| CSR 名称   | 全称                                          | 作用与内核应用                                                                                                                                                                   |
+|:-----------|:----------------------------------------------|:---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | **`satp`** | Supervisor Address Translation and Protection | **页表控制寄存器**。控制 MMU 开启。包含 `MODE`（如 SV39）、`ASID`（地址空间标识符，减少 TLB 刷新）和 `PPN`（根页表的物理页号）。**写入此寄存器通常需要紧跟 `sfence.vma` 指令。** |
+|            |                                               |                                                                                                                      |
 
 ### 5.3 优化与上下文切换神器
 | CSR 名称 | 全称 | 极底层优化场景 |
