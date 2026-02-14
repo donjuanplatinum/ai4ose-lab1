@@ -8,3 +8,6 @@
 https://os.barrensea.org
 
 请阅读: index.rst 这是入口
+## 代码
+
+实验的代码全部在code/ch{n}.patch
