@@ -1,0 +1,298 @@
+diff --git a/os/Cargo.toml b/os/Cargo.toml
+index 81f8cd6..7324d84 100644
+--- a/os/Cargo.toml
++++ b/os/Cargo.toml
+@@ -7,11 +7,11 @@ edition = "2021"
+ # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+ 
+ [dependencies]
+-riscv = { git = "https://github.com/rcore-os/riscv", features = ["inline-asm"] }
++riscv = { git = "https://gitee.com/rcore-os/riscv", features = ["inline-asm"] }
+ lazy_static = { version = "1.4.0", features = ["spin_no_std"] }
+ log = "0.4"
+ buddy_system_allocator = "0.6"
+ bitflags = "1.2.1"
+ xmas-elf = "0.7.0"
+-virtio-drivers = { git = "https://github.com/rcore-os/virtio-drivers", rev = "4ee80e5" }
++virtio-drivers = { git = "https://gitee.com/rcore-os/virtio-drivers", rev = "4ee80e5" }
+ easy-fs = { path = "../easy-fs" }
+diff --git a/os/src/sync/mutex.rs b/os/src/sync/mutex.rs
+index cec1e03..0cb8f5b 100644
+--- a/os/src/sync/mutex.rs
++++ b/os/src/sync/mutex.rs
+@@ -12,6 +12,10 @@ pub trait Mutex: Sync + Send {
+     fn lock(&self);
+     /// Unlock the mutex
+     fn unlock(&self);
++    /// get tid
++    fn get_owner_tid(&self) -> Option<usize>;
++    /// is_locked
++    fn is_locked(&self) -> bool;
+ }
+ 
+ /// Spinlock Mutex struct
+@@ -28,7 +32,16 @@ impl MutexSpin {
+     }
+ }
+ 
+-impl Mutex for MutexSpin {
++impl Mutex for MutexSpin
++{
++    /// get tid
++    fn get_owner_tid(&self) -> Option<usize> {
++        None
++    }
++    /// locked?
++    fn is_locked(&self) -> bool {
++        *self.locked.exclusive_access()
++    }
+     /// Lock the spinlock mutex
+     fn lock(&self) {
+         trace!("kernel: MutexSpin::lock");
+@@ -60,6 +73,7 @@ pub struct MutexBlocking {
+ pub struct MutexBlockingInner {
+     locked: bool,
+     wait_queue: VecDeque<Arc<TaskControlBlock>>,
++    pub owner_tid: Option<usize>,
+ }
+ 
+ impl MutexBlocking {
+@@ -70,6 +84,7 @@ impl MutexBlocking {
+             inner: unsafe {
+                 UPSafeCell::new(MutexBlockingInner {
+                     locked: false,
++		    owner_tid: None,
+                     wait_queue: VecDeque::new(),
+                 })
+             },
+@@ -78,9 +93,18 @@ impl MutexBlocking {
+ }
+ 
+ impl Mutex for MutexBlocking {
++    /// locked?
++    fn is_locked(&self) -> bool {
++	self.inner.exclusive_access().locked
++    }
++    /// get tid
++    fn get_owner_tid(&self) -> Option<usize> {
++        let inner = self.inner.exclusive_access();
++        
++        inner.owner_tid 
++    }
+     /// lock the blocking mutex
+     fn lock(&self) {
+-        trace!("kernel: MutexBlocking::lock");
+         let mut mutex_inner = self.inner.exclusive_access();
+         if mutex_inner.locked {
+             mutex_inner.wait_queue.push_back(current_task().unwrap());
+@@ -88,18 +112,23 @@ impl Mutex for MutexBlocking {
+             block_current_and_run_next();
+         } else {
+             mutex_inner.locked = true;
++            
++            let tid = current_task().unwrap().inner_exclusive_access().res.as_ref().unwrap().tid;
++            mutex_inner.owner_tid = Some(tid);
+         }
+     }
+ 
+     /// unlock the blocking mutex
+     fn unlock(&self) {
+-        trace!("kernel: MutexBlocking::unlock");
+         let mut mutex_inner = self.inner.exclusive_access();
+-        assert!(mutex_inner.locked);
+         if let Some(waking_task) = mutex_inner.wait_queue.pop_front() {
++
++            let next_tid = waking_task.inner_exclusive_access().res.as_ref().unwrap().tid;
++            mutex_inner.owner_tid = Some(next_tid); 
+             wakeup_task(waking_task);
+         } else {
+             mutex_inner.locked = false;
++            mutex_inner.owner_tid = None; 
+         }
+     }
+ }
+diff --git a/os/src/syscall/mod.rs b/os/src/syscall/mod.rs
+index 3e64fd6..c979b0c 100644
+--- a/os/src/syscall/mod.rs
++++ b/os/src/syscall/mod.rs
+@@ -152,3 +152,4 @@ pub fn syscall(syscall_id: usize, args: [usize; 4]) -> isize {
+         _ => panic!("Unsupported syscall_id: {}", syscall_id),
+     }
+ }
++
+diff --git a/os/src/syscall/sync.rs b/os/src/syscall/sync.rs
+index 290ee6f..6a84d7d 100644
+--- a/os/src/syscall/sync.rs
++++ b/os/src/syscall/sync.rs
+@@ -69,7 +69,14 @@ pub fn sys_mutex_lock(mutex_id: usize) -> isize {
+             .tid
+     );
+     let process = current_process();
++    let tid = current_task().unwrap().inner_exclusive_access().res.as_ref().unwrap().tid;
++    
+     let process_inner = process.inner_exclusive_access();
++    if process_inner.deadlock_detect {
++	if !check_deadlock(&process_inner,tid,mutex_id,ResourceType::Mutex) {
++	    return -0xDEAD;
++	}
++    }
+     let mutex = Arc::clone(process_inner.mutex_list[mutex_id].as_ref().unwrap());
+     drop(process_inner);
+     drop(process);
+@@ -150,22 +157,31 @@ pub fn sys_semaphore_up(sem_id: usize) -> isize {
+     0
+ }
+ /// semaphore down syscall
++/// semaphore down syscall
+ pub fn sys_semaphore_down(sem_id: usize) -> isize {
+     trace!(
+         "kernel:pid[{}] tid[{}] sys_semaphore_down",
+         current_task().unwrap().process.upgrade().unwrap().getpid(),
+-        current_task()
+-            .unwrap()
+-            .inner_exclusive_access()
+-            .res
+-            .as_ref()
+-            .unwrap()
+-            .tid
++        current_task().unwrap().inner_exclusive_access().res.as_ref().unwrap().tid
+     );
+     let process = current_process();
++    let tid = current_task().unwrap().inner_exclusive_access().res.as_ref().unwrap().tid;
++
++    
+     let process_inner = process.inner_exclusive_access();
++    if process_inner.deadlock_detect {
++    
++        if !check_deadlock(&process_inner, tid, sem_id, ResourceType::Semaphore) {
++            return -0xDEAD;
++        }
++    }
++    
++    
+     let sem = Arc::clone(process_inner.semaphore_list[sem_id].as_ref().unwrap());
++    
++    
+     drop(process_inner);
++    
+     sem.down();
+     0
+ }
+@@ -245,7 +261,73 @@ pub fn sys_condvar_wait(condvar_id: usize, mutex_id: usize) -> isize {
+ /// enable deadlock detection syscall
+ ///
+ /// YOUR JOB: Implement deadlock detection, but might not all in this syscall
+-pub fn sys_enable_deadlock_detect(_enabled: usize) -> isize {
++pub fn sys_enable_deadlock_detect(is_enable: usize) -> isize {
+     trace!("kernel: sys_enable_deadlock_detect NOT IMPLEMENTED");
+-    -1
++    let process = current_process();
++    let mut inner = process.inner_exclusive_access();
++    if is_enable > 1 { return -1; }
++    inner.deadlock_detect = is_enable == 1;
++    0
++}
++use alloc::vec;
++#[derive(PartialEq)]
++pub enum ResourceType {
++    Mutex,
++    Semaphore,
++}
++use crate::task::ProcessControlBlockInner;
++fn check_deadlock(
++    inner: &ProcessControlBlockInner,
++    tid: usize,
++    resource_id: usize,
++    _req_type: ResourceType
++) -> bool {
++    let n = inner.tasks.len();
++    let m = inner.mutex_list.len();
++
++    
++    let mut available = vec![0i32; m];
++    let mut allocation = vec![vec![0i32; m]; n];
++    let mut need = vec![vec![0i32; m]; n];
++
++    
++    for j in 0..m {
++        if let Some(mutex) = &inner.mutex_list[j] {
++            if !mutex.is_locked() {
++                available[j] = 1;
++            } else if let Some(owner) = mutex.get_owner_tid() {
++                if owner < n { allocation[owner][j] = 1; }
++            }
++        }
++    }
++
++    
++    need[tid][resource_id] = 1;
++
++    
++    let mut work = available.clone();
++    let mut finish = vec![false; n];
++    
++    
++    for i in 0..n {
++        let has_alloc = allocation[i].iter().any(|&x| x > 0);
++        let has_need = need[i].iter().any(|&x| x > 0);
++        if !has_alloc && !has_need { finish[i] = true; }
++    }
++
++    loop {
++        let mut found = false;
++        for i in 0..n {
++            if !finish[i] && (0..m).all(|j| need[i][j] <= work[j]) {
++                for j in 0..m {
++                    work[j] += allocation[i][j];
++                }
++                finish[i] = true;
++                found = true;
++            }
++        }
++        if !found { break; }
++    }
++
++    finish.iter().all(|&f| f)
+ }
+diff --git a/os/src/task/mod.rs b/os/src/task/mod.rs
+index 81a25be..85468b6 100644
+--- a/os/src/task/mod.rs
++++ b/os/src/task/mod.rs
+@@ -18,7 +18,7 @@ mod signal;
+ mod switch;
+ #[allow(clippy::module_inception)]
+ mod task;
+-
++pub use process::ProcessControlBlockInner;
+ use self::id::TaskUserRes;
+ use crate::fs::{open_file, OpenFlags};
+ use crate::task::manager::add_stopping_task;
+diff --git a/os/src/task/process.rs b/os/src/task/process.rs
+index c2be1ce..c27d8c4 100644
+--- a/os/src/task/process.rs
++++ b/os/src/task/process.rs
+@@ -49,6 +49,8 @@ pub struct ProcessControlBlockInner {
+     pub semaphore_list: Vec<Option<Arc<Semaphore>>>,
+     /// condvar list
+     pub condvar_list: Vec<Option<Arc<Condvar>>>,
++    /// deadlock_detect
++    pub deadlock_detect: bool,
+ }
+ 
+ impl ProcessControlBlockInner {
+@@ -100,6 +102,7 @@ impl ProcessControlBlock {
+             pid: pid_handle,
+             inner: unsafe {
+                 UPSafeCell::new(ProcessControlBlockInner {
++		    deadlock_detect: false,
+                     is_zombie: false,
+                     memory_set,
+                     parent: None,
+@@ -234,6 +237,7 @@ impl ProcessControlBlock {
+             inner: unsafe {
+                 UPSafeCell::new(ProcessControlBlockInner {
+                     is_zombie: false,
++		    deadlock_detect: parent.deadlock_detect,
+                     memory_set,
+                     parent: Some(Arc::downgrade(self)),
+                     children: Vec::new(),
