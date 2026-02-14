@@ -2,12 +2,21 @@
 ## TLDR
 Ch4 通过三级页表机制实现了硬件级的地址隔离，让每个应用都以为自己拥有整块从 0x10000 开始的连续内存，而内核则通过“跳板页”在不破坏流水线的情况下完成虚实地址空间的丝滑切换。
 
+## 名词解释
+- SV39: RISC-V的一种分页模式 使用39位的虚拟地址空间
+- MMU: 内存管理单元 **翻译** VA为PA
+- VA/PA: 虚拟地址/物理地址
+- TLB: 旁路转换缓冲（快表）,作为页表项的**缓存**以加速**地址翻译**的过程
+- SATP: RISC-V控制分页算法的**寄存器**
+- 
 ## ch3-ch4的演进
 从 Ch3 到 Ch4，本质上是操作系统从**“物理内存管理器”**向**“虚拟地址空间映射器”**的跃迁。
 
 如果用一句话来形容这个演进：**内核从“地勤搬运工”变成了“时空幻术师”。**
 
+硬件层面： 配置了`satp`寄存器 以让RISCV从**直接寻址**->**多级页表寻址**
 
+软件层面： 引入了`MemorySet`(一个进程完整的地址空间,包含进程的页表 和该进程拥有的虚拟内存区域)和`MapArea`(定义了内存段的rust抽象.text .data等)
 ### 核心演进维度对比
 
 | 维度 | Chapter 3 (物理隔离/分时) | Chapter 4 (虚拟存储/分页) | 演进意义 |
@@ -104,7 +113,80 @@ Address      Content                    Description
             |  +-----------------+  |
 -------------------------------------------------------------------------
 ```
-## 
+## 地址空间
+操作系统对于**内存** 有很多机制来提供内存管理的**灵活性** **安全性** **高效性**
+
+对于一个追求 `nostd` 极致优化、手搓 Gentoo 的内核工程师来说，聊内存机制自然不能只停留在“虚拟内存”这种科普层面。我们直接切入底层，从硬件架构、内核策略到缓存一致性来拆解。
+
+---
+
+### 1. 硬件抽象与寻址机制 (The Hardware Foundation)
+
+在底层，一切始于 MMU 和页表。对于高性能内核，这里的优化点在于**减少 TLB Miss**。
+
+* **多级页表 (Paging):** 常见的 4-level 或 5-level 结构。在 Rust 中实现时，通常需要手动维护页表的映射关系，并处理 `CR3` 寄存器的切换。
+* **TLB (Translation Lookaside Buffer):**
+* **Huge Pages:** 使用 2MB 或 1GB 的大页来减少页表层级，提高 TLB 命中率。在内核开发中，这通常涉及对 `HUGETLB` 的手动分配。
+* **PCID (Process-Context Identifiers):** 在上下文切换时，通过标记 TLB 条目属于哪个进程，避免清空（flush）整个 TLB，从而降低系统调用后的性能开销。
+
+
+* **Segmentation (分段):** 虽然在 x86_64 下大多被弱化，但在处理 `GS` 或 `FS` 段寄存器（用于线程局部存储 TLS 或 Per-CPU 数据）时依然是核心机制。
+
+---
+
+### 2. 物理内存管理 (Physical Memory Management)
+
+既然你追求缓冲区优化和页优化，物理层面的分配策略是核心：
+
+* **Buddy System (伙伴系统):** 解决外部碎片的经典算法。在 Rust 内核中，实现一个高效且并发安全的 Buddy Allocator 是 `nostd` 环境的基础。
+* **Slab/Slub/Slob Allocator:** 针对内核中小对象的频繁分配。
+* **Object Caching:** 减少对伙伴系统的请求次数。
+* **CPU-Local Caches:** 避免跨核锁竞争，这是你追求“系统调用次数”和“工程优化”时的重点。
+
+
+* **Watermark & Reclaim:** 内存水位线机制（High/Low/Min），当物理内存不足时触发异步 Kswapd 或同步的 Direct Reclaim。
+
+---
+
+### 3. 虚拟内存管理 (Virtual Memory Management)
+
+* **VMA (Virtual Memory Areas):** 内核通过红黑树或区间树（Range Tree）管理进程的地址空间映射，优化查找效率。
+* **Demand Paging (请求调页):** 只有当发生 `Page Fault` 时，内核才真正分配物理帧并建立映射。
+* **Copy-On-Write (COW):** `fork()` 的核心，通过只读权限共享内存，写时触发异常并拷贝，极大地优化了进程创建开销。
+
+---
+
+### 4. 极致优化：缓存、对齐与 IO
+
+作为 Linux 高级用户，你关心的往往是这些“硬核”细节：
+
+#### CPU 缓存优化 (Cache Optimization)
+
+* **False Sharing Prevention:** 在 Rust 结构体中使用 `#[repr(align(64))]` 来确保不同核竞争的变量不在同一个 Cache Line 中。
+* **Data Prefetching:** 手动插入预取指令，降低缓存未命中导致的流水线停顿。
+
+#### 零拷贝机制 (Zero-copy)
+
+* **Direct IO:** 绕过 Page Cache，直接在用户态缓冲区和设备之间传输数据。
+* **mmap:** 将文件直接映射到地址空间，减少内核态与用户态之间冗余的 `memcpy`。
+
+#### 页优化 (Page Optimization)
+
+* **Page Coloring (页着色):** 针对物理地址进行偏移，确保连续的虚拟页不会在 Cache 中发生哈希碰撞。
+* **ASLR (Address Space Layout Randomization):** 虽然是安全机制，但其对内存布局的影响是内核开发者必须考虑的。
+
+---
+
+### 5. Rust `nostd` 环境下的内存挑战
+
+在 `nostd` 下，你失去了标准库的 `Box` 和 `Vec`。实现内存机制意味着：
+
+1. **Global Allocator:** 你必须实现 `GlobalAlloc` trait。
+2. **Interior Mutability:** 在处理并发分配时，如何优雅地使用 `Spinlock` 或 `Lock-free` 算法来保护分配器状态。
+3. **Ownership & Lifetime:** 利用 Rust 的所有权机制来静态保证内存安全，避免 `Use-after-free`，这在 C 实现的内核中是最大的痛点。
+
+
+
 ## mm
 ```
 虚拟地址 (Virtual Address)
@@ -120,3 +202,4 @@ Address      Content                    Description
 +-----------------------------------+-------+
 物理地址 (Physical Address, 56-bit)
 ```
+
