@@ -1,0 +1,392 @@
+diff --git a/os/src/config.rs b/os/src/config.rs
+index 71d4a5e..bab2bd7 100644
+--- a/os/src/config.rs
++++ b/os/src/config.rs
+@@ -21,3 +21,8 @@ pub const TRAP_CONTEXT_BASE: usize = TRAMPOLINE - PAGE_SIZE;
+ pub const CLOCK_FREQ: usize = 12500000;
+ /// the physical memory end
+ pub const MEMORY_END: usize = 0x88000000;
++
++/// 默认优先级
++pub const DEFAULT_PRIO: usize = 16;
++/// 大stride常数
++pub const BIG_STRIDE: usize = 0x7FFF_FFF;
+diff --git a/os/src/mm/.#memory_set.rs b/os/src/mm/.#memory_set.rs
+new file mode 120000
+index 0000000..c3a7516
+--- /dev/null
++++ b/os/src/mm/.#memory_set.rs
+@@ -0,0 +1 @@
++donjuan@gentoo.28492:1771061476
+\ No newline at end of file
+diff --git a/os/src/mm/memory_set.rs b/os/src/mm/memory_set.rs
+index c3d15f3..419d4fc 100644
+--- a/os/src/mm/memory_set.rs
++++ b/os/src/mm/memory_set.rs
+@@ -48,6 +48,43 @@ impl MemorySet {
+     pub fn token(&self) -> usize {
+         self.page_table.token()
+     }
++    /// 检查是否有重叠
++    /// 在分配新的内存区域前 必须确保请求的地址范围(start..end)没有与目前的区域重叠
++    
++    pub fn check_overlap(&self, start_va: VirtAddr, end_va: VirtAddr) -> bool {
++        let new_start_vpn = start_va.floor(); // 向下取整到最近的页起始VPN
++        let new_end_vpn = end_va.ceil(); // 向上取整到最近的页结尾
++        
++        self.areas.iter().any(|area| {
++	    // NOT(要分配的结尾 < 目前区域的头 或 要分配的头 > 目前区域的尾)
++            !(new_end_vpn <= area.vpn_range.get_start() || new_start_vpn >= area.vpn_range.get_end())
++		
++        })
++    }
++    /// munmap
++    /// 删除区域
++    pub fn remove_framed_area(&mut self, start_va: VirtAddr, end_va: VirtAddr) -> isize {
++        let start_vpn = start_va.floor();
++        let end_vpn = end_va.ceil();
++
++	// 精确匹配
++        let area_idx = self.areas.iter().position(|area| {
++            area.vpn_range.get_start() == start_vpn && area.vpn_range.get_end() == end_vpn
++        });
++
++        if let Some(idx) = area_idx {
++            self.areas.remove(idx);
++            let mut vpn = start_vpn;
++            while vpn < end_vpn {
++                self.page_table.unmap(vpn);
++                vpn.step();
++            }
++            0
++        } else {
++            // 区间不匹配
++            -1
++        }
++    }
+     /// Assume that no conflicts.
+     pub fn insert_framed_area(
+         &mut self,
+diff --git a/os/src/syscall/process.rs b/os/src/syscall/process.rs
+index 1631f39..dc6916c 100644
+--- a/os/src/syscall/process.rs
++++ b/os/src/syscall/process.rs
+@@ -102,33 +102,105 @@ pub fn sys_waitpid(pid: isize, exit_code_ptr: *mut i32) -> isize {
+     // ---- release current PCB automatically
+ }
+ 
++use crate::timer::get_time;
++use crate::config::{CLOCK_FREQ,PAGE_SIZE};
++use crate::mm::VirtAddr;
++use crate::mm::MapPermission;
+ /// YOUR JOB: get time with second and microsecond
+ /// HINT: You might reimplement it with virtual memory management.
+ /// HINT: What if [`TimeVal`] is splitted by two pages ?
+-pub fn sys_get_time(_ts: *mut TimeVal, _tz: usize) -> isize {
+-    trace!(
+-        "kernel:pid[{}] sys_get_time NOT IMPLEMENTED",
+-        current_task().unwrap().pid.0
+-    );
+-    -1
++pub fn sys_get_time(ts: *mut TimeVal, _tz: usize) -> isize {
++    let task = current_task().unwrap();
++    
++let inner = task.inner_exclusive_access();
++    let ticks = get_time();
++    let sec = ticks / CLOCK_FREQ;
++    let usec = (ticks % CLOCK_FREQ) * 1_000_000 / CLOCK_FREQ;
++    
++    let time_val = TimeVal { sec, usec };
++
++    let src = unsafe {
++        core::slice::from_raw_parts(
++            &time_val as *const _ as *const u8,
++            core::mem::size_of::<TimeVal>(),
++        )
++    };
++
++    let mut head = 0;
++    let len = core::mem::size_of::<TimeVal>();
++    let start_va = ts as usize;
++
++    while head < len {
++        let va = VirtAddr::from(start_va + head);
++        let vpn = va.floor();
++        
++        
++        let pte = match inner.memory_set.translate(vpn) {
++            Some(pte) if pte.is_valid() && pte.readable() => pte,
++            _ => return -1, 
++        };
++        
++        let ppn = pte.ppn();
++        let page_offset = va.page_offset();
++        let chunk_len = (PAGE_SIZE - page_offset).min(len - head);
++        
++        let dst = &mut ppn.get_bytes_array()[page_offset..page_offset + chunk_len];
++        dst.copy_from_slice(&src[head..head + chunk_len]);
++        
++        head += chunk_len;
++    }
++    0
+ }
+ 
+ /// YOUR JOB: Implement mmap.
+-pub fn sys_mmap(_start: usize, _len: usize, _port: usize) -> isize {
+-    trace!(
+-        "kernel:pid[{}] sys_mmap NOT IMPLEMENTED",
+-        current_task().unwrap().pid.0
+-    );
+-    -1
++pub fn sys_mmap(start: usize, len: usize, port: usize) -> isize {
++    if start % PAGE_SIZE != 0 { return -1; }
++    if port & !0x7 != 0 || port == 0 { return -1; }
++
++    let task = current_task().unwrap();
++    let mut inner = task.inner_exclusive_access();
++    
++    let start_va = VirtAddr::from(start);
++    let end_va = VirtAddr::from(start + len);
++
++    if inner.memory_set.check_overlap(start_va, end_va) {
++        return -1;
++    }
++
++    
++    let mut permission = MapPermission::U;
++    if port & 0x1 != 0 { permission |= MapPermission::R; }
++    if port & 0x2 != 0 { permission |= MapPermission::W; }
++    if port & 0x4 != 0 { permission |= MapPermission::X; }
++
++    inner.memory_set.insert_framed_area(start_va, end_va, permission);
++
++    0
+ }
+ 
+ /// YOUR JOB: Implement munmap.
+-pub fn sys_munmap(_start: usize, _len: usize) -> isize {
+-    trace!(
+-        "kernel:pid[{}] sys_munmap NOT IMPLEMENTED",
+-        current_task().unwrap().pid.0
+-    );
+-    -1
++pub fn sys_munmap(start: usize, len: usize) -> isize {
++    
++    if start % PAGE_SIZE != 0 {
++        return -1;
++    }
++
++    let task = current_task().unwrap();
++    let mut inner = task.inner_exclusive_access();
++    let start_va = VirtAddr::from(start);
++    let end_va = VirtAddr::from(start + len);
++
++
++    let result = inner.memory_set.remove_framed_area(start_va, end_va);
++
++
++    if result == 0 {
++    
++        0
++    } else {
++    
++        -1
++    }
+ }
+ 
+ /// change data segment size
+@@ -143,19 +215,33 @@ pub fn sys_sbrk(size: i32) -> isize {
+ 
+ /// YOUR JOB: Implement spawn.
+ /// HINT: fork + exec =/= spawn
+-pub fn sys_spawn(_path: *const u8) -> isize {
+-    trace!(
+-        "kernel:pid[{}] sys_spawn NOT IMPLEMENTED",
+-        current_task().unwrap().pid.0
+-    );
+-    -1
++pub fn sys_spawn(path: *const u8) -> isize {
++    trace!("kernel:pid[{}] sys_spawn", current_task().unwrap().pid.0);
++    let token = current_user_token();
++    let path = translated_str(token, path);
++    
++    if let Some(data) = get_app_data_by_name(path.as_str()) {
++        let current_task = current_task().unwrap();
++        
++        let new_task = current_task.spawn(data);
++        let new_pid = new_task.pid.0;
++        
++        add_task(new_task);
++        new_pid as isize
++    } else {
++        -1
++    }
+ }
+-
++use crate::config::BIG_STRIDE;
+ // YOUR JOB: Set task priority.
+-pub fn sys_set_priority(_prio: isize) -> isize {
+-    trace!(
+-        "kernel:pid[{}] sys_set_priority NOT IMPLEMENTED",
+-        current_task().unwrap().pid.0
+-    );
+-    -1
++pub fn sys_set_priority(priority: isize) -> isize {
++    if priority < 2 {
++        return -1;
++    }
++    let priority = priority as usize;
++    let task = current_task().unwrap();
++    let mut inner = task.inner_exclusive_access();
++    inner.priority = priority;
++    inner.pass = BIG_STRIDE / priority;
++    priority as isize
+ }
+diff --git a/os/src/task/manager.rs b/os/src/task/manager.rs
+index 99393a4..b1d56a4 100644
+--- a/os/src/task/manager.rs
++++ b/os/src/task/manager.rs
+@@ -23,7 +23,34 @@ impl TaskManager {
+     }
+     /// Take a process out of the ready queue
+     pub fn fetch(&mut self) -> Option<Arc<TaskControlBlock>> {
+-        self.ready_queue.pop_front()
++        if self.ready_queue.is_empty() {
++            return None;
++        }
++
++
++        let mut min_stride_idx = 0;
++        let mut min_stride = self.ready_queue[0].inner_exclusive_access().stride;
++
++        for i in 1..self.ready_queue.len() {
++            let current_stride = self.ready_queue[i].inner_exclusive_access().stride;
++            if current_stride < min_stride {
++                min_stride = current_stride;
++                min_stride_idx = i;
++            }
++        }
++
++
++        let task = self.ready_queue.remove(min_stride_idx).unwrap();
++        
++
++        {
++            let mut inner = task.inner_exclusive_access();
++            inner.stride += inner.pass;
++
++        }
++        
++
++        Some(task)
+     }
+ }
+ 
+diff --git a/os/src/task/task.rs b/os/src/task/task.rs
+index 1402c31..7452674 100644
+--- a/os/src/task/task.rs
++++ b/os/src/task/task.rs
+@@ -1,7 +1,7 @@
+ //! Types related to task management & Functions for completely changing TCB
+ use super::TaskContext;
+ use super::{kstack_alloc, pid_alloc, KernelStack, PidHandle};
+-use crate::config::TRAP_CONTEXT_BASE;
++use crate::config::{TRAP_CONTEXT_BASE,BIG_STRIDE};
+ use crate::mm::{MemorySet, PhysPageNum, VirtAddr, KERNEL_SPACE};
+ use crate::sync::UPSafeCell;
+ use crate::trap::{trap_handler, TrapContext};
+@@ -34,6 +34,61 @@ impl TaskControlBlock {
+         let inner = self.inner_exclusive_access();
+         inner.memory_set.token()
+     }
++    ///spawn
++pub fn spawn(self: &Arc<Self>, elf_data: &[u8]) -> Arc<Self> {
++        let (memory_set, user_sp, entry_point) = MemorySet::from_elf(elf_data);
++        let trap_cx_ppn = memory_set
++            .translate(VirtAddr::from(TRAP_CONTEXT_BASE).into())
++            .unwrap()
++            .ppn();
++
++        let pid_handle = pid_alloc();
++        let kernel_stack = kstack_alloc();
++        let kernel_stack_top = kernel_stack.get_top();
++
++        let task_control_block = Arc::new(TaskControlBlock {
++            pid: pid_handle,
++            kernel_stack,
++            inner: unsafe {
++                UPSafeCell::new(TaskControlBlockInner {
++                    trap_cx_ppn,
++                    base_size: user_sp,
++                    task_cx: TaskContext::goto_trap_return(kernel_stack_top),
++                    task_status: TaskStatus::Ready,
++                    memory_set,
++                    parent: Some(Arc::downgrade(self)),
++                    children: Vec::new(),
++                    exit_code: 0,
++                    heap_bottom: user_sp,
++                    program_brk: user_sp,
++                    priority: 16,
++                    stride: 0,
++                    pass: BIG_STRIDE / 16,
++                })
++            },
++        });
++
++
++        self.inner_exclusive_access().children.push(Arc::clone(&task_control_block));
++
++
++        {
++
++            let inner = task_control_block.inner_exclusive_access();
++            let trap_cx = inner.get_trap_cx();
++            *trap_cx = TrapContext::app_init_context(
++                entry_point,
++                user_sp,
++                KERNEL_SPACE.exclusive_access().token(),
++                kernel_stack_top,
++                trap_handler as usize,
++            );
++
++        }
++
++
++        task_control_block
++    }
+ }
+ 
+ pub struct TaskControlBlockInner {
+@@ -68,6 +123,12 @@ pub struct TaskControlBlockInner {
+ 
+     /// Program break
+     pub program_brk: usize,
++    /// priority
++    pub priority: usize,
++    /// stride
++    pub stride: usize,
++    /// pass
++    pub pass: usize,
+ }
+ 
+ impl TaskControlBlockInner {
+@@ -118,6 +179,9 @@ impl TaskControlBlock {
+                     exit_code: 0,
+                     heap_bottom: user_sp,
+                     program_brk: user_sp,
++		    priority: 16,
++		    stride: 0,
++		    pass: BIG_STRIDE / 16,
+                 })
+             },
+         };
+@@ -191,6 +255,9 @@ impl TaskControlBlock {
+                     exit_code: 0,
+                     heap_bottom: parent_inner.heap_bottom,
+                     program_brk: parent_inner.program_brk,
++		    priority: parent_inner.priority,
++		    stride: parent_inner.stride,
++		    pass: parent_inner.pass,
+                 })
+             },
+         });
