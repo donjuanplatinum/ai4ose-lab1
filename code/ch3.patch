@@ -1,0 +1,292 @@
+diff --git a/os/src/batch.rs b/os/src/batch.rs
+deleted file mode 100644
+index 43e2c55..0000000
+--- a/os/src/batch.rs
++++ /dev/null
+@@ -1,154 +0,0 @@
+-//! batch subsystem
+-
+-use crate::sync::UPSafeCell;
+-use crate::trap::TrapContext;
+-use core::arch::asm;
+-use lazy_static::*;
+-
+-const USER_STACK_SIZE: usize = 4096 * 2;
+-const KERNEL_STACK_SIZE: usize = 4096 * 2;
+-const MAX_APP_NUM: usize = 16;
+-const APP_BASE_ADDRESS: usize = 0x80400000;
+-const APP_SIZE_LIMIT: usize = 0x20000;
+-
+-#[repr(align(4096))]
+-struct KernelStack {
+-    data: [u8; KERNEL_STACK_SIZE],
+-}
+-
+-#[repr(align(4096))]
+-struct UserStack {
+-    data: [u8; USER_STACK_SIZE],
+-}
+-
+-static KERNEL_STACK: KernelStack = KernelStack {
+-    data: [0; KERNEL_STACK_SIZE],
+-};
+-static USER_STACK: UserStack = UserStack {
+-    data: [0; USER_STACK_SIZE],
+-};
+-
+-impl KernelStack {
+-    fn get_sp(&self) -> usize {
+-        self.data.as_ptr() as usize + KERNEL_STACK_SIZE
+-    }
+-    pub fn push_context(&self, cx: TrapContext) -> &'static mut TrapContext {
+-        let cx_ptr = (self.get_sp() - core::mem::size_of::<TrapContext>()) as *mut TrapContext;
+-        unsafe {
+-            *cx_ptr = cx;
+-        }
+-        unsafe { cx_ptr.as_mut().unwrap() }
+-    }
+-}
+-
+-impl UserStack {
+-    fn get_sp(&self) -> usize {
+-        self.data.as_ptr() as usize + USER_STACK_SIZE
+-    }
+-}
+-
+-struct AppManager {
+-    num_app: usize,
+-    current_app: usize,
+-    app_start: [usize; MAX_APP_NUM + 1],
+-}
+-
+-impl AppManager {
+-    pub fn print_app_info(&self) {
+-        println!("[kernel] num_app = {}", self.num_app);
+-        for i in 0..self.num_app {
+-            println!(
+-                "[kernel] app_{} [{:#x}, {:#x})",
+-                i,
+-                self.app_start[i],
+-                self.app_start[i + 1]
+-            );
+-        }
+-    }
+-
+-    unsafe fn load_app(&self, app_id: usize) {
+-        if app_id >= self.num_app {
+-            println!("All applications completed!");
+-            use crate::board::QEMUExit;
+-            crate::board::QEMU_EXIT_HANDLE.exit_success();
+-        }
+-        println!("[kernel] Loading app_{}", app_id);
+-        // clear app area
+-        core::slice::from_raw_parts_mut(APP_BASE_ADDRESS as *mut u8, APP_SIZE_LIMIT).fill(0);
+-        let app_src = core::slice::from_raw_parts(
+-            self.app_start[app_id] as *const u8,
+-            self.app_start[app_id + 1] - self.app_start[app_id],
+-        );
+-        let app_dst = core::slice::from_raw_parts_mut(APP_BASE_ADDRESS as *mut u8, app_src.len());
+-        app_dst.copy_from_slice(app_src);
+-        // Memory fence about fetching the instruction memory
+-        // It is guaranteed that a subsequent instruction fetch must
+-        // observes all previous writes to the instruction memory.
+-        // Therefore, fence.i must be executed after we have loaded
+-        // the code of the next app into the instruction memory.
+-        // See also: riscv non-priv spec chapter 3, 'Zifencei' extension.
+-        asm!("fence.i");
+-    }
+-
+-    pub fn get_current_app(&self) -> usize {
+-        self.current_app
+-    }
+-
+-    pub fn move_to_next_app(&mut self) {
+-        self.current_app += 1;
+-    }
+-}
+-
+-lazy_static! {
+-    static ref APP_MANAGER: UPSafeCell<AppManager> = unsafe {
+-        UPSafeCell::new({
+-            extern "C" {
+-                fn _num_app();
+-            }
+-            let num_app_ptr = _num_app as usize as *const usize;
+-            let num_app = num_app_ptr.read_volatile();
+-            let mut app_start: [usize; MAX_APP_NUM + 1] = [0; MAX_APP_NUM + 1];
+-            let app_start_raw: &[usize] =
+-                core::slice::from_raw_parts(num_app_ptr.add(1), num_app + 1);
+-            app_start[..=num_app].copy_from_slice(app_start_raw);
+-            AppManager {
+-                num_app,
+-                current_app: 0,
+-                app_start,
+-            }
+-        })
+-    };
+-}
+-
+-/// init batch subsystem
+-pub fn init() {
+-    print_app_info();
+-}
+-
+-/// print apps info
+-pub fn print_app_info() {
+-    APP_MANAGER.exclusive_access().print_app_info();
+-}
+-
+-/// run next app
+-pub fn run_next_app() -> ! {
+-    let mut app_manager = APP_MANAGER.exclusive_access();
+-    let current_app = app_manager.get_current_app();
+-    unsafe {
+-        app_manager.load_app(current_app);
+-    }
+-    app_manager.move_to_next_app();
+-    drop(app_manager);
+-    // before this we have to drop local variables related to resources manually
+-    // and release the resources
+-    extern "C" {
+-        fn __restore(cx_addr: usize);
+-    }
+-    unsafe {
+-        __restore(KERNEL_STACK.push_context(TrapContext::app_init_context(
+-            APP_BASE_ADDRESS,
+-            USER_STACK.get_sp(),
+-        )) as *const _ as usize);
+-    }
+-    panic!("Unreachable in batch::run_current_app!");
+-}
+diff --git a/os/src/config.rs b/os/src/config.rs
+index 89ed947..3d49cbb 100644
+--- a/os/src/config.rs
++++ b/os/src/config.rs
+@@ -19,3 +19,5 @@ pub const APP_SIZE_LIMIT: usize = 0x20000;
+ pub const CLOCK_FREQ: usize = 12500000;
+ /// the physical memory end
+ pub const MEMORY_END: usize = 0x88000000;
++
++
+diff --git a/os/src/syscall/mod.rs b/os/src/syscall/mod.rs
+index 3b579ba..63ac336 100644
+--- a/os/src/syscall/mod.rs
++++ b/os/src/syscall/mod.rs
+@@ -27,8 +27,10 @@ mod process;
+ use fs::*;
+ use process::*;
+ 
++use crate::task::{add_syscall_times};
+ /// handle syscall exception with `syscall_id` and other arguments
+ pub fn syscall(syscall_id: usize, args: [usize; 3]) -> isize {
++    add_syscall_times(syscall_id);
+     match syscall_id {
+         SYSCALL_WRITE => sys_write(args[0], args[1] as *const u8, args[2]),
+         SYSCALL_EXIT => sys_exit(args[0] as i32),
+diff --git a/os/src/syscall/process.rs b/os/src/syscall/process.rs
+index ab43bbe..2829417 100644
+--- a/os/src/syscall/process.rs
++++ b/os/src/syscall/process.rs
+@@ -3,7 +3,7 @@ use crate::{
+     task::{exit_current_and_run_next, suspend_current_and_run_next},
+     timer::get_time_us,
+ };
+-
++use crate::task::get_syscall_times;
+ #[repr(C)]
+ #[derive(Debug)]
+ pub struct TimeVal {
+@@ -41,5 +41,27 @@ pub fn sys_get_time(ts: *mut TimeVal, _tz: usize) -> isize {
+ // TODO: implement the syscall
+ pub fn sys_trace(_trace_request: usize, _id: usize, _data: usize) -> isize {
+     trace!("kernel: sys_trace");
+-    -1
++    match _trace_request {
++	// 获取id地址的值
++	0 => {
++	    let ptr = _id as *const u8;
++	    unsafe {
++		*ptr as isize
++	    }
++	},
++	1 => {
++	    let ptr = _id as *mut u8;
++	    let val = (_data & 0xFF) as u8;
++	    unsafe {
++		*ptr = val;
++	    }
++	    0
++	},
++	2 => {
++	    get_syscall_times(_id) as isize
++	},
++	_ => {
++	    -1
++	}
++    }
+ }
+diff --git a/os/src/task/mod.rs b/os/src/task/mod.rs
+index c1636ef..6388259 100644
+--- a/os/src/task/mod.rs
++++ b/os/src/task/mod.rs
+@@ -54,6 +54,7 @@ lazy_static! {
+         let mut tasks = [TaskControlBlock {
+             task_cx: TaskContext::zero_init(),
+             task_status: TaskStatus::UnInit,
++	    task_syscall_times: [0;500],
+         }; MAX_APP_NUM];
+         for (i, task) in tasks.iter_mut().enumerate() {
+             task.task_cx = TaskContext::goto_restore(init_app_cx(i));
+@@ -135,6 +136,16 @@ impl TaskManager {
+             panic!("All applications completed!");
+         }
+     }
++    fn get_syscall_times(&self,id: usize) -> usize{
++	let inner = self.inner.exclusive_access();
++	let current_task = inner.current_task;
++	inner.tasks[current_task].task_syscall_times[id]
++    }
++    fn add_syscall_times(&self,id: usize) {
++	let mut inner = self.inner.exclusive_access();
++	let current_task = inner.current_task;
++	inner.tasks[current_task].task_syscall_times[id] += 1;
++    }
+ }
+ 
+ /// Run the first task in task list.
+@@ -169,3 +180,13 @@ pub fn exit_current_and_run_next() {
+     mark_current_exited();
+     run_next_task();
+ }
++
++/// get the syscall times
++pub fn get_syscall_times(id:usize) -> usize{
++    TASK_MANAGER.get_syscall_times(id)
++}
++
++/// add syscall times + 1
++pub fn add_syscall_times(id: usize) {
++    TASK_MANAGER.add_syscall_times(id)
++}
+diff --git a/os/src/task/task.rs b/os/src/task/task.rs
+index e6580c9..20be0f2 100644
+--- a/os/src/task/task.rs
++++ b/os/src/task/task.rs
+@@ -1,7 +1,6 @@
+ //! Types related to task management
+ 
+ use super::TaskContext;
+-
+ /// The task control block (TCB) of a task.
+ #[derive(Copy, Clone)]
+ pub struct TaskControlBlock {
+@@ -9,6 +8,9 @@ pub struct TaskControlBlock {
+     pub task_status: TaskStatus,
+     /// The task context
+     pub task_cx: TaskContext,
++    /// 当前任务调用的系统调用次数
++    pub task_syscall_times: [usize;500],
++    
+ }
+ 
+ /// The status of a task

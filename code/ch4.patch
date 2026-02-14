@@ -1,0 +1,269 @@
+diff --git a/os/src/mm/memory_set.rs b/os/src/mm/memory_set.rs
+index 7a7b7ea..39cb9b0 100644
+--- a/os/src/mm/memory_set.rs
++++ b/os/src/mm/memory_set.rs
+@@ -51,7 +51,45 @@ impl MemorySet {
+     pub fn token(&self) -> usize {
+         self.page_table.token()
+     }
++    /// 检查是否有重叠
++    /// 在分配新的内存区域前 必须确保请求的地址范围(start..end)没有与目前的区域重叠
++    
++    pub fn check_overlap(&self, start_va: VirtAddr, end_va: VirtAddr) -> bool {
++        let new_start_vpn = start_va.floor(); // 向下取整到最近的页起始VPN
++        let new_end_vpn = end_va.ceil(); // 向上取整到最近的页结尾
++        
++        self.areas.iter().any(|area| {
++	    // NOT(要分配的结尾 < 目前区域的头 或 要分配的头 > 目前区域的尾)
++            !(new_end_vpn <= area.vpn_range.get_start() || new_start_vpn >= area.vpn_range.get_end())
++		
++        })
++    }
++    /// munmap
++    /// 删除区域
++    pub fn remove_framed_area(&mut self, start_va: VirtAddr, end_va: VirtAddr) -> isize {
++        let start_vpn = start_va.floor();
++        let end_vpn = end_va.ceil();
++
++	// 精确匹配
++        let area_idx = self.areas.iter().position(|area| {
++            area.vpn_range.get_start() == start_vpn && area.vpn_range.get_end() == end_vpn
++        });
++
++        if let Some(idx) = area_idx {
++            self.areas.remove(idx);
++            let mut vpn = start_vpn;
++            while vpn < end_vpn {
++                self.page_table.unmap(vpn);
++                vpn.step();
++            }
++            0
++        } else {
++            // 区间不匹配
++            -1
++        }
++    }
+     /// Assume that no conflicts.
++    /// MMap的分配
+     pub fn insert_framed_area(
+         &mut self,
+         start_va: VirtAddr,
+diff --git a/os/src/syscall/process.rs b/os/src/syscall/process.rs
+index ec4285b..7dfcc1e 100644
+--- a/os/src/syscall/process.rs
++++ b/os/src/syscall/process.rs
+@@ -1,6 +1,7 @@
+ //! Process management syscalls
+ use crate::task::{change_program_brk, exit_current_and_run_next, suspend_current_and_run_next};
+-
++use crate::timer::get_time_us;
++use crate::mm::{translated_byte_buffer};
+ #[repr(C)]
+ #[derive(Debug)]
+ pub struct TimeVal {
+@@ -27,26 +28,86 @@ pub fn sys_yield() -> isize {
+ /// HINT: What if [`TimeVal`] is splitted by two pages ?
+ pub fn sys_get_time(_ts: *mut TimeVal, _tz: usize) -> isize {
+     trace!("kernel: sys_get_time");
+-    -1
++    let token = crate::task::current_user_token(); // 获取页表token
++    let us = get_time_us();
++    let kernel_ts = TimeVal {
++        sec: us / 1_000_000,
++        usec: us % 1_000_000,
++    };
++    let buffers = translated_byte_buffer( // ts转换为物理页切片
++        token,
++        _ts as *const u8,
++        core::mem::size_of::<TimeVal>()
++    );
++    // 地址非法
++    if buffers.is_empty() {
++	return -1;
++    }
++    
++    let src = unsafe {
++	core::slice::from_raw_parts(
++	    &kernel_ts as *const _ as *const u8,
++	    core::mem::size_of::<TimeVal>(),
++	)
++    };
++    let mut current_offset = 0;
++    for sub_buf in buffers {
++	let copy_len = sub_buf.len();
++	sub_buf.copy_from_slice(
++	    &src[current_offset..current_offset + copy_len]
++	);
++	current_offset += copy_len;
++    }
++    0
+ }
+ 
+ /// TODO: Finish sys_trace to pass testcases
+ /// HINT: You might reimplement it with virtual memory management.
+ pub fn sys_trace(_trace_request: usize, _id: usize, _data: usize) -> isize {
+     trace!("kernel: sys_trace");
+-    -1
++    let token = crate::task::current_user_token(); // 获取页表token
++    
++    match _trace_request {
++	// 获取id地址的值
++	0 => {
++	    let buf = translated_byte_buffer(token,_id as *const u8,1); // 获取一个[u8;1]
++	    if !buf.is_empty() {
++		buf[0][0] as isize
++	    } else {
++		-1
++	    }
++	    
++	},
++	1 => {
++	    let mut buf = translated_byte_buffer(token,_id as *const u8,1);
++	    if !buf.is_empty() {
++		buf[0][0] = (_data & 0xFF) as u8;
++		0
++	    } else {
++		-1
++	    }
++	},
++	2 => {
++	    crate::task::get_syscall_times(_id) as isize
++	},
++	_ => {
++	    -1
++	}
++    }
+ }
++use crate::config::PAGE_SIZE;
+ 
+ // YOUR JOB: Implement mmap.
+-pub fn sys_mmap(_start: usize, _len: usize, _port: usize) -> isize {
+-    trace!("kernel: sys_mmap NOT IMPLEMENTED YET!");
+-    -1
++pub fn sys_mmap(start: usize, len: usize, port: usize) -> isize {
++    if start % PAGE_SIZE != 0 { return -1; }
++    if port == 0 || (port & !0x7) != 0 { return -1; }
++    crate::task::current_mmap(start, len, port)
+ }
+ 
+ // YOUR JOB: Implement munmap.
+ pub fn sys_munmap(_start: usize, _len: usize) -> isize {
+     trace!("kernel: sys_munmap NOT IMPLEMENTED YET!");
+-    -1
++    crate::task::current_munmap(_start, _len)
+ }
+ /// change data segment size
+ pub fn sys_sbrk(size: i32) -> isize {
+diff --git a/os/src/task/mod.rs b/os/src/task/mod.rs
+index a745df8..6183b0d 100644
+--- a/os/src/task/mod.rs
++++ b/os/src/task/mod.rs
+@@ -153,6 +153,17 @@ impl TaskManager {
+             panic!("All applications completed!");
+         }
+     }
++    fn get_syscall_times(&self,id: usize) -> usize{
++	let inner = self.inner.exclusive_access();
++	let current_task = inner.current_task;
++	inner.tasks[current_task].task_syscall_times[id]
++    }
++    fn add_syscall_times(&self,id: usize) {
++	let mut inner = self.inner.exclusive_access();
++	let current_task = inner.current_task;
++	inner.tasks[current_task].task_syscall_times[id] += 1;
++    }
++    
+ }
+ 
+ /// Run the first task in task list.
+@@ -202,3 +213,24 @@ pub fn current_trap_cx() -> &'static mut TrapContext {
+ pub fn change_program_brk(size: i32) -> Option<usize> {
+     TASK_MANAGER.change_current_program_brk(size)
+ }
++/// get the syscall times
++pub fn get_syscall_times(id:usize) -> usize{
++    TASK_MANAGER.get_syscall_times(id)
++}
++
++/// add syscall times + 1
++pub fn add_syscall_times(id: usize) {
++    TASK_MANAGER.add_syscall_times(id)
++}
++/// mmap
++pub fn current_mmap(start: usize, len: usize, port: usize) -> isize {
++    let mut inner = TASK_MANAGER.inner.exclusive_access();
++    let cur = inner.current_task;
++    inner.tasks[cur].mmap(start, len, port)
++}
++/// munmap
++pub fn current_munmap(start: usize, len: usize) -> isize {
++    let mut inner = TASK_MANAGER.inner.exclusive_access();
++    let cur = inner.current_task;
++    inner.tasks[cur].munmap(start, len)
++}
+diff --git a/os/src/task/task.rs b/os/src/task/task.rs
+index dce6981..1120ce5 100644
+--- a/os/src/task/task.rs
++++ b/os/src/task/task.rs
+@@ -28,6 +28,9 @@ pub struct TaskControlBlock {
+ 
+     /// Program break
+     pub program_brk: usize,
++
++    /// syscall times
++    pub task_syscall_times: [usize;500],
+ }
+ 
+ impl TaskControlBlock {
+@@ -63,6 +66,7 @@ impl TaskControlBlock {
+             base_size: user_sp,
+             heap_bottom: user_sp,
+             program_brk: user_sp,
++	    task_syscall_times: [0;500],
+         };
+         // prepare TrapContext in user space
+         let trap_cx = task_control_block.get_trap_cx();
+@@ -96,6 +100,43 @@ impl TaskControlBlock {
+             None
+         }
+     }
++    /// mmap
++    pub fn mmap(&mut self, start: usize, len: usize, port: usize) -> isize {
++        if port == 0 || (port & !0x7) != 0 {
++            return -1;
++        }
++        
++        if start % 4096 != 0 {
++            return -1;
++        }
++
++        // 转换权限位到MapPermission
++        let mut permission = MapPermission::U; // 必须包含 U 位
++        if port & 0x1 != 0 { permission |= MapPermission::R; }
++        if port & 0x2 != 0 { permission |= MapPermission::W; }
++        if port & 0x4 != 0 { permission |= MapPermission::X; }
++
++	// 虚拟地址转换
++	let start_va = VirtAddr::from(start);
++        let end_va = VirtAddr::from(start + len);
++        // 检查是否有重叠
++        if self.memory_set.check_overlap(start_va, end_va) {
++            return -1;
++        }
++	// 分配
++        self.memory_set.insert_framed_area(start_va, end_va, permission);
++        0
++    }
++    /// mumap
++    pub fn munmap(&mut self, start: usize, len: usize) -> isize {
++        let start_va = VirtAddr::from(start);
++        let end_va = VirtAddr::from(start + len);
++        
++        // 校验是否页对齐
++        if !start_va.aligned() { return -1; }
++
++        self.memory_set.remove_framed_area(start_va, end_va)
++    }
+ }
+ 
+ #[derive(Copy, Clone, PartialEq)]
