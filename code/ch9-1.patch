@@ -1,0 +1,301 @@
+diff --git a/Makefile b/Makefile
+index 21d01c2..47efe45 100644
+--- a/Makefile
++++ b/Makefile
+@@ -1,8 +1,9 @@
+-DOCKER_NAME ?= rcore-docker
++DOCKER_NAME ?= rcore
+ .PHONY: docker build_docker
+-	
+-docker:
+-	docker run --network host --rm -it -v ${PWD}:/mnt -w /mnt ${DOCKER_NAME} bash
++docker-run:
++	podman run --name ${DOCKER_NAME} --network host -itd -v ${PWD}:/mnt -w /mnt ${DOCKER_NAME}
++docker-exec:
++	podman exec -it  ${DOCKER_NAME} bash
+ 
+ build_docker: 
+ 	docker build -t ${DOCKER_NAME} .
+diff --git a/os/Cargo.toml b/os/Cargo.toml
+index 7324d84..6e92260 100644
+--- a/os/Cargo.toml
++++ b/os/Cargo.toml
+@@ -14,4 +14,5 @@ buddy_system_allocator = "0.6"
+ bitflags = "1.2.1"
+ xmas-elf = "0.7.0"
+ virtio-drivers = { git = "https://gitee.com/rcore-os/virtio-drivers", rev = "4ee80e5" }
++#virtio-drivers = "0.5.0"
+ easy-fs = { path = "../easy-fs" }
+diff --git a/os/Makefile b/os/Makefile
+index 06ce62f..2cc698d 100644
+--- a/os/Makefile
++++ b/os/Makefile
+@@ -74,6 +74,8 @@ run-inner:
+ 	@qemu-system-riscv64 \
+ 		-M 128m \
+ 		-machine virt \
++		-device virtio-gpu-device,xres=800,yres=600 \
++ 		-display vnc=:0 \
+ 		-nographic \
+ 		-bios $(BOOTLOADER) \
+ 		-device loader,file=$(KERNEL_BIN),addr=$(KERNEL_ENTRY_PA) \
+diff --git a/os/src/boards/qemu.rs b/os/src/boards/qemu.rs
+index 2a72fb6..9e47693 100644
+--- a/os/src/boards/qemu.rs
++++ b/os/src/boards/qemu.rs
+@@ -7,7 +7,7 @@ pub const CLOCK_FREQ: usize = 12500000;
+ /// The base address of control registers in VIRT_TEST/RTC/Virtio_Block device
+ pub const MMIO: &[(usize, usize)] = &[
+     (0x0010_0000, 0x00_2000), // VIRT_TEST/RTC  in virt machine
+-    (0x1000_1000, 0x00_1000), // Virtio Block in virt machine
++    (0x1000_1000, 0x00_8000), // Virtio Block in virt machine
+ ];
+ 
+ pub type BlockDeviceImpl = crate::drivers::block::VirtIOBlock;
+diff --git a/os/src/drivers/gpu/mod.rs b/os/src/drivers/gpu/mod.rs
+new file mode 100644
+index 0000000..a5f7552
+--- /dev/null
++++ b/os/src/drivers/gpu/mod.rs
+@@ -0,0 +1,3 @@
++mod virtio_gpu;
++
++pub use virtio_gpu::VirtioGpuHal;
+diff --git a/os/src/drivers/gpu/virtio_gpu.rs b/os/src/drivers/gpu/virtio_gpu.rs
+new file mode 100644
+index 0000000..39a05a0
+--- /dev/null
++++ b/os/src/drivers/gpu/virtio_gpu.rs
+@@ -0,0 +1,50 @@
++use crate::mm::{PageTable, VirtAddr, kernel_token};
++use virtio_drivers::Hal;
++
++
++use crate::mm::{frame_alloc_contiguous,PhysPageNum,frame_dealloc};
++//use virtio_drivers::VirtIOGpu;
++
++// /// GPU instance
++// pub struct VirtIOGPU(UPSafeCell<VirtIOGpu<'static,VirtioGpuHal>>);
++
++
++/// gpu
++pub struct VirtioGpuHal;
++
++impl Hal for VirtioGpuHal {
++    /// dma_alloc
++    fn dma_alloc(pages: usize) -> usize {
++        if let Some(frame_buf) = frame_alloc_contiguous(pages) {
++            let pa = frame_buf.start_ppn.0 << 12;
++            
++            core::mem::forget(frame_buf); 
++            
++            pa
++        } else {
++            panic!("DMA Contiguous Alloc Failed!");
++        }
++    }
++
++    /// dealloc
++    fn dma_dealloc(pa: usize, pages: usize) -> i32 {
++        let start_ppn = PhysPageNum(pa >> 12);
++        for i in 0..pages {
++            frame_dealloc(PhysPageNum(start_ppn.0 + i));
++        }
++        0
++    }
++
++    /// 物理转虚拟
++    fn phys_to_virt(addr: usize) -> usize {
++        addr
++    }
++
++    /// 虚拟转物理
++    fn virt_to_phys(vaddr: usize) -> usize {
++        PageTable::from_token(kernel_token())
++            .translate_va(VirtAddr::from(vaddr))
++            .expect("VirtioGpuHal: Failed to translate VA to PA")
++            .0
++    }
++}
+diff --git a/os/src/drivers/mod.rs b/os/src/drivers/mod.rs
+index 0914632..3eeb463 100644
+--- a/os/src/drivers/mod.rs
++++ b/os/src/drivers/mod.rs
+@@ -3,3 +3,8 @@
+ pub mod block;
+ 
+ pub use block::BLOCK_DEVICE;
++
++/// gpu
++pub mod gpu;
++
++pub use gpu::VirtioGpuHal;
+diff --git a/os/src/gpu/mod.rs b/os/src/gpu/mod.rs
+new file mode 100644
+index 0000000..477e3ad
+--- /dev/null
++++ b/os/src/gpu/mod.rs
+@@ -0,0 +1,9 @@
++#[repr(C)]
++pub struct GpuInfo {
++    /// w
++    pub width: u32,
++    /// h
++    pub height: u32,
++    /// size
++    pub fb_size: usize,
++}
+diff --git a/os/src/main.rs b/os/src/main.rs
+index 056ed5f..872b9b3 100644
+--- a/os/src/main.rs
++++ b/os/src/main.rs
+@@ -66,6 +66,11 @@ fn clear_bss() {
+     }
+ }
+ 
++use crate::drivers::VirtioGpuHal;
++use virtio_drivers::{VirtIOGpu, VirtIOHeader};
++//use crate::sync::UPSafeCell;
++//use lazy_static::*;
++
+ #[no_mangle]
+ /// the rust entry-point of os
+ pub fn rust_main() -> ! {
+@@ -78,7 +83,42 @@ pub fn rust_main() -> ! {
+     trap::enable_timer_interrupt();
+     timer::set_next_trigger();
+     fs::list_apps();
++    println!("[kernel] Initializing Graphics...");
++    draw_rainbow_board();
+     task::add_initproc();
+     task::run_tasks();
+     panic!("Unreachable in rust_main!");
+ }
++/// qicaiban
++pub fn draw_rainbow_board() {
++    println!("[kernel] Start GPU raw drawing...");
++    let mmio_base = 0x10008000;
++    let header = unsafe { &mut *(mmio_base as *mut VirtIOHeader) };
++
++    let mut gpu = VirtIOGpu::<VirtioGpuHal>::new(header)
++        .expect("Failed to initialize VirtIO GPU");
++
++    
++    let (mut width, mut height) = gpu.resolution();
++    if width == 0 || height == 0 {
++        println!("[kernel] Warning: GPU reported 0x0. Forcing 800x600...");
++        width = 800;
++        height = 600;
++    }
++
++    let fb = gpu.setup_framebuffer().expect("Failed to setup FB");
++    println!("[kernel] Framebuffer initialized at {:p}", fb.as_ptr());
++
++    for y in 0..height {
++        for x in 0..width {
++            let offset = ((y * width + x) * 4) as usize;
++            fb[offset]     = (x & 0xff) as u8;          // R
++            fb[offset + 1] = (y & 0xff) as u8;          // G
++            fb[offset + 2] = ((x + y) & 0xff) as u8;    // B
++            fb[offset + 3] = 255;                       // A
++        }
++    }
++
++    gpu.flush().expect("Failed to flush GPU");
++    println!("[kernel] GPU draw finished!");
++}
+diff --git a/os/src/mm/frame_allocator.rs b/os/src/mm/frame_allocator.rs
+index a942274..ade5f99 100644
+--- a/os/src/mm/frame_allocator.rs
++++ b/os/src/mm/frame_allocator.rs
+@@ -7,6 +7,32 @@ use alloc::vec::Vec;
+ use core::fmt::{self, Debug, Formatter};
+ use lazy_static::*;
+ 
++/// 追踪一组连续的物理页帧
++pub struct StackedFrameBuffer {
++    pub start_ppn: PhysPageNum,
++    pub page_count: usize,
++}
++
++impl StackedFrameBuffer {
++    /// new
++    pub fn new(start_ppn: PhysPageNum, page_count: usize) -> Self {
++        let start_addr = start_ppn.0 << 12;
++        unsafe {
++            core::ptr::write_bytes(start_addr as *mut u8, 0, page_count * 4096);
++        }
++        Self { start_ppn, page_count }
++    }
++}
++
++impl Drop for StackedFrameBuffer {
++    fn drop(&mut self) {
++        // 批量归还
++        for i in 0..self.page_count {
++            frame_dealloc(PhysPageNum(self.start_ppn.0 + i));
++        }
++    }
++}
++
+ /// tracker for physical page frame allocation and deallocation
+ pub struct FrameTracker {
+     /// physical page number
+@@ -55,6 +81,17 @@ impl StackFrameAllocator {
+         self.end = r.0;
+         // trace!("last {} Physical Frames.", self.end - self.current);
+     }
++    /// 分配连续的页
++    pub fn alloc_contiguous(&mut self, pages: usize) -> Option<PhysPageNum> {
++        if self.current + pages <= self.end {
++            let start_ppn = self.current;
++            self.current += pages;
++            Some(PhysPageNum(start_ppn))
++        } else {
++            // 内存碎片化或耗尽
++            None
++        }
++    }
+ }
+ impl FrameAllocator for StackFrameAllocator {
+     fn new() -> Self {
+@@ -115,6 +152,14 @@ pub fn frame_dealloc(ppn: PhysPageNum) {
+     FRAME_ALLOCATOR.exclusive_access().dealloc(ppn);
+ }
+ 
++/// 分配连续的物理页
++pub fn frame_alloc_contiguous(pages: usize) -> Option<StackedFrameBuffer> {
++    FRAME_ALLOCATOR
++        .exclusive_access()
++        .alloc_contiguous(pages)
++        .map(|ppn| StackedFrameBuffer::new(ppn, pages))
++}
++
+ #[allow(unused)]
+ pub fn frame_allocator_test() {
+     let mut v: Vec<FrameTracker> = Vec::new();
+diff --git a/os/src/mm/memory_set.rs b/os/src/mm/memory_set.rs
+index 6dc14aa..71cb38b 100644
+--- a/os/src/mm/memory_set.rs
++++ b/os/src/mm/memory_set.rs
+@@ -177,6 +177,7 @@ impl MemorySet {
+                 None,
+             );
+         }
++	
+         memory_set
+     }
+     /// Include sections in elf and trampoline and TrapContext and user stack,
+diff --git a/os/src/mm/mod.rs b/os/src/mm/mod.rs
+index d75c373..a6adfb1 100644
+--- a/os/src/mm/mod.rs
++++ b/os/src/mm/mod.rs
+@@ -14,7 +14,7 @@ mod page_table;
+ 
+ use address::VPNRange;
+ pub use address::{PhysAddr, PhysPageNum, StepByOne, VirtAddr, VirtPageNum};
+-pub use frame_allocator::{frame_alloc, frame_dealloc, FrameTracker};
++pub use frame_allocator::{frame_alloc, frame_dealloc, FrameTracker,frame_alloc_contiguous};
+ pub use memory_set::remap_test;
+ pub use memory_set::{kernel_token, MapPermission, MemorySet, KERNEL_SPACE};
+ use page_table::PTEFlags;
