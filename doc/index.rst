@@ -25,6 +25,7 @@ AI4OSE内核文档
    batch
    multi
    mm
+   virtio-gpu
 
 知识链条文档
 
