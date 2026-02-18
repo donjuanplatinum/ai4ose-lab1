@@ -1,17 +1,6 @@
-//! # Chapter 1: 应用程序与基本执行环境 (图形版 - 最终修复)
-//!
-//! 本章实现了一个基于 VirtIO GPU 的裸机图形程序。
-//!
-//! ## 关键修复点
-//!
-//! 1. **DMA 对齐**：使用 `#[repr(align(4096))]` 强制 DMA 堆按页对齐，防止 VirtIO 驱动 Panic。
-//! 2. **借用检查**：先获取分辨率，释放 GPU 借用后，再获取 Framebuffer。
-//! 3. **安全性**：使用 `addr_of_mut!` 访问 `static mut`，符合 Rust 2024 标准。
-//! 4. **API 适配**：适配 `virtio-drivers` v0.12.0 的 Transport 抽象层。
-
 #![no_std]
 #![no_main]
-#![cfg_attr(target_arch = "riscv64", deny(warnings, missing_docs))]
+#![cfg_attr(target_arch = "riscv64", deny(warnings))]
 #![cfg_attr(not(target_arch = "riscv64"), allow(dead_code))]
 
 extern crate alloc;
@@ -27,12 +16,7 @@ use virtio_drivers::{
     BufferDirection, Hal, PhysAddr,
 };
 
-// ==========================================
-// 1. 全局内存分配器 (Bump Allocator)
-// ==========================================
 
-/// 一个简易的线性分配器。
-/// virtio-drivers 内部需要 Vec 等集合类型，因此必须实现全局分配器。
 struct BumpAllocator {
     heap_start: usize,
     heap_end: usize,
@@ -60,11 +44,11 @@ unsafe impl GlobalAlloc for BumpAllocator {
     }
 
     unsafe fn dealloc(&self, _ptr: *mut u8, _layout: Layout) {
-        // 本分配器极简，不支持内存回收
+        
     }
 }
 
-const HEAP_SIZE: usize = 1024 * 1024; // 1MB 堆空间
+const HEAP_SIZE: usize = 1024 * 1024; 
 static mut HEAP_SPACE: [u8; HEAP_SIZE] = [0; HEAP_SIZE];
 
 #[global_allocator]
@@ -74,14 +58,11 @@ static ALLOCATOR: BumpAllocator = BumpAllocator {
     next: UnsafeCell::new(0),
 };
 
-// ==========================================
-// 2. HAL 实现 (硬件抽象层)
-// ==========================================
 
 /// VirtIO HAL 实现。
 struct VirtioHal;
 
-const DMA_HEAP_SIZE: usize = 512 * 4096; // 2MB DMA 空间
+const DMA_HEAP_SIZE: usize = 512 * 4096;
 
 /// 包装结构体以强制 4K 对齐。
 /// VirtIO 协议要求 DMA 地址必须页对齐，否则会导致 Panic。
@@ -101,11 +82,9 @@ unsafe impl Hal for VirtioHal {
             let offset = DMA_HEAD;
             DMA_HEAD += size;
 
-            // 使用 addr_of_mut! 获取裸指针，避免对 static mut 创建引用 (UB)
             let base_ptr = addr_of_mut!(DMA_HEAP.0) as *mut u8;
             let ptr = base_ptr.add(offset);
             
-            // 清零内存
             core::ptr::write_bytes(ptr, 0, size);
             
             let paddr = ptr as usize as u64; 
@@ -130,11 +109,7 @@ unsafe impl Hal for VirtioHal {
     }
 }
 
-// ==========================================
-// 3. 绘图与主逻辑
-// ==========================================
 
-/// 简单的颜色结构体。
 #[derive(Clone, Copy)]
 struct Color { r: u8, g: u8, b: u8, a: u8 }
 
@@ -165,7 +140,7 @@ fn draw_rect(fb: &mut [u8], stride: usize, x: usize, y: usize, w: usize, h: usiz
     }
 }
 
-/// S 态程序入口点。
+
 #[cfg(target_arch = "riscv64")]
 #[unsafe(naked)]
 #[unsafe(no_mangle)]
@@ -184,7 +159,7 @@ unsafe extern "C" fn _start() -> ! {
     )
 }
 
-/// Rust 主逻辑入口。
+
 extern "C" fn rust_main() -> ! {
     // 0. 初始化堆分配器
     unsafe {
@@ -199,7 +174,7 @@ extern "C" fn rust_main() -> ! {
 
     let mut gpu_device: Option<VirtIOGpu<VirtioHal, MmioTransport>> = None;
 
-    // 1. 扫描 MMIO 总线寻找 GPU
+
     for i in 0..8 {
         let addr = 0x10001000 + i * 0x1000;
         let header_ptr = NonNull::new(addr as *mut _).unwrap();
@@ -219,7 +194,7 @@ extern "C" fn rust_main() -> ! {
     }
 
     if let Some(mut gpu) = gpu_device {
-        // 2. 先获取分辨率 (避免与 setup_framebuffer 的借用冲突)
+
         let (width, height) = match gpu.resolution() {
             Ok(r) => r,
             Err(_) => {
@@ -231,25 +206,25 @@ extern "C" fn rust_main() -> ! {
         let w = width as usize;
         let h = height as usize;
 
-        // 3. 设置 Framebuffer
+
         match gpu.setup_framebuffer() {
             Ok(fb) => {
                 print_str("[Kernel] Painting...\n");
                 
-                // 清屏
+
                 draw_rect(fb, w * 4, 0, 0, w, h, Color::WHITE);
                 
-                // 绘制七巧板 OS 图案
+
                 let start_x = 100;
                 let start_y = 100;
                 
-                // O - 红色部分
+
                 draw_rect(fb, w * 4, start_x, start_y, 50, 200, Color::RED);   
                 draw_rect(fb, w * 4, start_x, start_y, 150, 50, Color::RED);   
                 draw_rect(fb, w * 4, start_x, start_y + 150, 150, 50, Color::RED); 
                 draw_rect(fb, w * 4, start_x + 100, start_y, 50, 200, Color::RED); 
 
-                // S - 蓝色部分
+
                 let sx = 300;
                 draw_rect(fb, w * 4, sx, start_y, 150, 50, Color::BLUE);      
                 draw_rect(fb, w * 4, sx, start_y, 50, 100, Color::BLUE);      
@@ -257,7 +232,7 @@ extern "C" fn rust_main() -> ! {
                 draw_rect(fb, w * 4, sx + 100, start_y + 75, 50, 125, Color::BLUE); 
                 draw_rect(fb, w * 4, sx, start_y + 150, 150, 50, Color::BLUE);      
 
-                // 4. 刷新缓冲区到屏幕
+
                 let _ = gpu.flush();
                 print_str("[Kernel] Done.\n");
             },
@@ -276,7 +251,6 @@ fn print_str(s: &str) {
     for c in s.bytes() { console_putchar(c); }
 }
 
-/// Panic 处理函数。
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {
     print_str("Panic: ");
@@ -286,13 +260,3 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
     shutdown(true)
 }
 
-/// 非 RISC-V 架构存根。
-#[cfg(not(target_arch = "riscv64"))]
-mod stub {
-    /// 存根入口。
-    #[unsafe(no_mangle)] pub extern "C" fn main() -> i32 { 0 }
-    /// Libc 启动存根。
-    #[unsafe(no_mangle)] pub extern "C" fn __libc_start_main() -> i32 { 0 }
-    /// Rust 异常存根。
-    #[unsafe(no_mangle)] pub extern "C" fn rust_eh_personality() {}
-}
