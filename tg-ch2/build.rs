@@ -122,6 +122,8 @@ fn objcopy_to_bin(elf: &PathBuf) -> PathBuf {
             "--strip-all",
             "-O",
             "binary",
+            // "--gap-fill",
+            // "0x00",
             bin.to_string_lossy().as_ref(),
         ])
         .status()

@@ -67,6 +67,9 @@ features = ["nobios"]
 version = "0.4.2-preview.1"
 features = ["kernel"]
 
+[dependencies.virtio-drivers]
+version = "0.12.0"
+
 [build-dependencies.serde]
 version = "1"
 features = ["derive"]
