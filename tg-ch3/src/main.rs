@@ -214,14 +214,17 @@ extern "C" fn rust_main() -> ! {
                 DeviceType::GPU => {
                     if let Ok(mut gpu) = VirtIOGpu::<VirtioHal, MmioTransport>::new(transport) {
                         log::info!("VirtIO-GPU device declared");
+                        let (w, h) = gpu.resolution().unwrap();
                         if let Ok(fb) = gpu.setup_framebuffer() {
+                            let fb_ptr = fb.as_mut_ptr();
+                            let fb_len = fb.len();
                             unsafe {
-                                FB_PTR = fb.as_mut_ptr();
-                                FB_LEN = fb.len();
-                                FB_WIDTH = gpu.resolution().unwrap().0 as usize;
+                                FB_PTR = fb_ptr;
+                                FB_LEN = fb_len;
+                                FB_WIDTH = w as usize;
                                 GPU_CONTEXT = Some(gpu);
                             }
-                            log::info!("Framebuffer initialized");
+                            log::info!("Framebuffer initialized: {}x{}, len={}", w, h, fb_len);
                         }
                     }
                 }
@@ -331,11 +334,15 @@ extern "C" fn rust_main() -> ! {
                         let irq = plic::claim();
                         if irq != 0 {
                             log::debug!("External interrupt: irq={}", irq);
-                            if irq >= 1 && irq <= 8 {
+                            if irq >= 1 && irq <= 31 {
                                 unsafe {
                                     if let Some(input) = INPUT_CONTEXT.as_mut() {
-                                        input.ack_interrupt();
-                                        tcb.signal_pending = true;
+                                        if input.ack_interrupt() {
+                                            tcb.signal_pending = true;
+                                        }
+                                    }
+                                    if let Some(gpu) = GPU_CONTEXT.as_mut() {
+                                        gpu.ack_interrupt();
                                     }
                                 }
                             }
@@ -416,7 +423,6 @@ mod impls {
                     // flush(): write(4, 0)
                     // paint_rect(x,y,w,h,c): write(4, &RectConfig, 20)
                     if count == 0 {
-                        tg_console::log::info!("GPU_FLUSH");
                         unsafe {
                             if let Some(gpu) = GPU_CONTEXT.as_mut() {
                                 let _ = gpu.flush();
@@ -432,7 +438,6 @@ mod impls {
                             let w = core::ptr::read(ptr.add(2)) as usize;
                             let h = core::ptr::read(ptr.add(3)) as usize;
                             let color = core::ptr::read(ptr.add(4));
-                            tg_console::log::info!("GPU_PAINT: x={}, y={}, w={}, h={}, color={:#X}", x, y, w, h, color);
 
                             if !FB_PTR.is_null() {
                                 let fb = core::slice::from_raw_parts_mut(FB_PTR as *mut u32, FB_LEN / 4);

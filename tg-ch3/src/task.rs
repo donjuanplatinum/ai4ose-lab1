@@ -29,9 +29,9 @@ pub struct TaskControlBlock {
     ctx: LocalContext,
     /// 任务完成标志：true 表示已退出或被杀死
     pub finish: bool,
-    /// 用户栈：8 KiB（1024 个 usize = 1024 × 8 = 8192 字节）
+    /// 用户栈：16 KiB（2048 个 usize = 2048 × 8 = 16384 字节）
     /// 每个任务拥有独立的栈空间，避免栈溢出影响其他任务
-    stack: [usize; 1024],
+    stack: [usize; 2048],
     /// 注册的信号处理函数入口
     pub signal_handler: Option<usize>,
     /// 是否有未处理的信号
@@ -60,7 +60,7 @@ impl TaskControlBlock {
     pub const ZERO: Self = Self {
         ctx: LocalContext::empty(),
         finish: false,
-        stack: [0; 1024],
+        stack: [0; 2048],
         signal_handler: None,
         signal_pending: false,
         saved_ctx: None,

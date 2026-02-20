@@ -8,8 +8,8 @@ pub const PLIC_SCLAIM_BASE: usize = PLIC_BASE + 0x20_1004;
 
 pub fn init() {
     let _hart_id = 0;
-    // Enable VirtIO Input interrupt (IRQ 11-18 depending on binding, assuming IRQ 1-8 for virtio here)
-    for irq in 1..=8 {
+    // Enable IRQs 1-31
+    for irq in 1..=31 {
         unsafe {
             // Set priority to 1
             let prio_ptr = (PLIC_PRIORITY_BASE + irq * 4) as *mut u32;
@@ -17,9 +17,9 @@ pub fn init() {
         }
     }
     unsafe {
-        // Enable IRQs 1-8 for S-mode on Hart 0
+        // Enable IRQs 1-31 for S-mode on Hart 0
         let enable_ptr = PLIC_SENABLE_BASE as *mut u32;
-        core::ptr::write_volatile(enable_ptr, 0x01fe); // Bits 1-8
+        core::ptr::write_volatile(enable_ptr, 0xFFFF_FFFE); 
         
         // Set threshold to 0
         let threshold_ptr = PLIC_SPRIORITY_BASE as *mut u32;
