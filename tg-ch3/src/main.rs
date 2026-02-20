@@ -82,7 +82,7 @@ static ALLOCATOR: BumpAllocator = BumpAllocator {
 };
 
 struct VirtioHal;
-const DMA_HEAP_SIZE: usize = 512 * 4096;
+const DMA_HEAP_SIZE: usize = 512 * 4096; // 2MB
 
 #[repr(align(4096))]
 struct AlignedDma([u8; DMA_HEAP_SIZE]);
@@ -117,7 +117,7 @@ unsafe impl Hal for VirtioHal {
 }
 
 static mut GPU_CONTEXT: Option<VirtIOGpu<VirtioHal, MmioTransport>> = None;
-static mut INPUT_CONTEXT: Option<VirtIOInput<VirtioHal, MmioTransport>> = None;
+static mut INPUT_CONTEXTS: [Option<VirtIOInput<VirtioHal, MmioTransport>>; 2] = [None, None];
 static mut FB_PTR: *mut u8 = ptr::null_mut();
 static mut FB_LEN: usize = 0;
 static mut FB_WIDTH: usize = 0;
@@ -234,7 +234,11 @@ extern "C" fn rust_main() -> ! {
                         log::info!("VirtIO-Input device declared");
                         input.ack_interrupt();
                         unsafe {
-                            INPUT_CONTEXT = Some(input);
+                            if INPUT_CONTEXTS[0].is_none() {
+                                INPUT_CONTEXTS[0] = Some(input);
+                            } else if INPUT_CONTEXTS[1].is_none() {
+                                INPUT_CONTEXTS[1] = Some(input);
+                            }
                         }
                     }
                 }
@@ -263,21 +267,30 @@ extern "C" fn rust_main() -> ! {
     // 第五步：开启 S 特权级时钟中断和外部中断
     // 这是实现抢占式调度的关键：允许时钟中断打断用户程序的执行
     // 外部中断用于接收 VirtIO 设备的输入事件
-    log::info!("Enabling interrupts...");
+    println!("[KERNEL] Enabling interrupts...");
     unsafe { 
         sie::set_stimer();
-        sie::set_sext();
+        // sie::set_sext();
     }
 
-    log::info!("Initializing PLIC...");
+    println!("[KERNEL] Initializing PLIC...");
     plic::init();
-    log::info!("PLIC initialized");
+    println!("[KERNEL] PLIC initialized");
+
+    unsafe { sstatus::set_sie(); }
+    println!("[KERNEL] Global interrupts enabled");
 
     // ========== 多道程序主循环 ==========
     // 使用轮转调度算法（Round-Robin），依次执行各任务
     let mut remain = index_mod; // 剩余未完成的任务数
     let mut i = 0usize; // 当前任务索引
+    let mut loop_count = 0u64;
+
     while remain > 0 {
+        loop_count += 1;
+        if loop_count % 1000 == 0 {
+            log::info!("Kernel heartbeat: {} loops", loop_count);
+        }
         let tcb = &mut tcbs[i];
         if !tcb.finish {
             loop {
@@ -333,12 +346,14 @@ extern "C" fn rust_main() -> ! {
                     Trap::Interrupt(Interrupt::SupervisorExternal) => {
                         let irq = plic::claim();
                         if irq != 0 {
-                            log::debug!("External interrupt: irq={}", irq);
-                            if irq >= 1 && irq <= 31 {
+                            // log::debug!("External interrupt: irq={}", irq);
+                            if irq >= 1 && irq <= 8 {
                                 unsafe {
-                                    if let Some(input) = INPUT_CONTEXT.as_mut() {
-                                        if input.ack_interrupt() {
-                                            tcb.signal_pending = true;
+                                    for i in 0..2 {
+                                        if let Some(input) = INPUT_CONTEXTS[i].as_mut() {
+                                            if input.ack_interrupt() {
+                                                tcb.signal_pending = true;
+                                            }
                                         }
                                     }
                                     if let Some(gpu) = GPU_CONTEXT.as_mut() {
@@ -387,7 +402,7 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
 /// 各依赖库所需接口的具体实现
 mod impls {
     use tg_syscall::*;
-    use crate::{GPU_CONTEXT, INPUT_CONTEXT, FB_PTR, FB_LEN, FB_WIDTH};
+    use crate::{GPU_CONTEXT, INPUT_CONTEXTS, FB_PTR, FB_LEN, FB_WIDTH};
 
     /// 控制台实现：通过 SBI 逐字符输出
     pub struct Console;
@@ -474,28 +489,23 @@ mod impls {
                     // struct input_event 大小通常为 24 字节
                     if count >= 24 {
                         unsafe {
-                            if let Some(input) = INPUT_CONTEXT.as_mut() {
-                                if let Some(event) = input.pop_pending_event() {
-                                    // 模拟 input_event 结构
-                                    let ptr = buf as *mut u64;
-                                    // event_time: u64
-                                    core::ptr::write(ptr, 0); 
-                                    // type (u16), code(u16), value(u32)
-                                    let _ev_ptr = buf as *mut virtio_drivers::device::input::InputEvent;
-                                    // event structure is compatible if padding matches
-                                    core::ptr::write_unaligned(ptr.add(1) as *mut _, event);
-                                    
-                                    return 24; // 返回读取的字节数
-                                } else {
-                                    // 无事件，返回 0 或者 EAGAIN (-2 在 tg-syscall 中通常为重试)
-                                    return 0;
+                            for i in 0..2 {
+                                if let Some(input) = (&mut INPUT_CONTEXTS[i]).as_mut() {
+                                    if let Some(event) = input.pop_pending_event() {
+                                        tg_console::log::info!("Input popped from dev {}: type={}, code={}, value={}", i, event.event_type, event.code, event.value);
+                                        let ptr_u64 = buf as *mut u64;
+                                        core::ptr::write(ptr_u64, 0);       // sec
+                                        core::ptr::write(ptr_u64.add(1), 0); // usec
+                                        let ptr_ev = ptr_u64.add(2) as *mut virtio_drivers::device::input::InputEvent;
+                                        core::ptr::write_unaligned(ptr_ev, event);
+                                        return 24;
+                                    }
                                 }
                             }
                         }
-                        0
-                    } else {
-                        -1
+                        return 0;
                     }
+                    0
                 }
                 _ => -1,
             }
