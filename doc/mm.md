@@ -218,7 +218,31 @@ SV39的虚拟地址布局
 物理地址 (Physical Address, 56-bit)
 ```
 ### 页表项
+寻址过程
 ```
+VA里面有VPN
+
+PA里面有PPN
+
+VA = VPN + off
+
+PA = PPN + off
+
+VA -> PA 其实就是VA的VPN -> PPN 然后把off原封不动的复制过去
+
+VA -> PA的过程需要PTE
+
+首先 CPU从satp寄存器拿到VPN[2](VPN[2]在cpu寄存器里) 在这个VPN[2]中找到PTE 这个PTE指向的PPN指向 VPN[1]。
+
+然后在VPN[1]找到一个PTE 这个PTE指向的PPN指向 VPN[0]
+
+VPN[0]里面最终的PTE就是目标物理地址
+```
+
+PTE的布局
+```
+PTE占64bit 0-7的8bit为标志位，8-9的2bit为RSW 自定义信息，10-64是PPN 也就是这个PTE指向的物理页号
+
 页表项 (Page Table Entry - SV39)
 +-------------+----------------------------------------------+------------+---+---+---+---+---+---+---+---+
 | Reserved    |              PPN (物理页号)                   |    RSW     | D | A | G | U | X | W | R | V |
@@ -254,6 +278,16 @@ SV39的虚拟地址布局
 | PhysAddr    | PA 物理地址  | 表示操作系统的**物理地址** |
 | VirtPageNum | VPN 虚拟页号 |                            |
 注意 地址 = 页号(高44)+偏移(低12)
+
+```rust
+// 物理地址在SV39的宽度为56: 44bit的PPN + 12bit的offset
+const PA_WIDTH_SV39: usize = 56;
+// 虚拟地址在SV39的宽度为39: 9bit VPN[2] + 9bit VPN[1] + 9bit VPN[0] + 12bit的offset
+const VA_WIDTH_SV39: usize = 39;
+const PPN_WIDTH_SV39: usize = PA_WIDTH_SV39 - PAGE_SIZE_BITS; // 56 - 12
+const VPN_WIDTH_SV39: usize = VA_WIDTH_SV39 - PAGE_SIZE_BITS; // 39 - 12
+```
+
 ```rust
 /// 物理地址PA
 #[derive(Copy, Clone, Ord, PartialOrd, Eq, PartialEq)]
@@ -267,5 +301,123 @@ pub struct PhysPageNum(pub usize);
 /// 虚拟页号PPN
 #[derive(Copy, Clone, Ord, PartialOrd, Eq, PartialEq)]
 pub struct VirtPageNum(pub usize);
+```
+### os/src/mm/page_table.rs
+页表的类型
+
+```rust
+// 8bit的权限位 作为PTE的低八位
+// bitflags将一个字节拆成了8位 
+bitflags! {
+    /// page table entry flags
+    pub struct PTEFlags: u8 {
+        /// Valid
+        const V = 1 << 0;
+        /// Readable
+        const R = 1 << 1;
+        /// Writable
+        const W = 1 << 2;
+        /// eXecutable
+        const X = 1 << 3;
+        /// User
+        const U = 1 << 4;
+        /// Global
+        const G = 1 << 5;
+        /// Accessed
+        const A = 1 << 6;
+        /// Dirty
+        const D = 1 << 7;
+    }
+}
+```
+
+这个就是PTE usize为64位
+```rust
+#[derive(Copy, Clone)]
+#[repr(C)]
+/// page table entry structure
+pub struct PageTableEntry {
+    /// bits of page table entry
+    pub bits: usize,
+}
+
+```
+
+这个是页表
+
+root_ppn存放L2页表(VPN2)的头地址 也就是satp寄存器里存放的
+
+frames就是存放PTE的地方 因为VPN[2] VPN[1] VPN[0]里面的**页**里面存放的都是**指针** 这些页就是frames
+```rust
+/// page table structure
+pub struct PageTable {
+    root_ppn: PhysPageNum,
+    frames: Vec<FrameTracker>,
+}
+```
+
+
+```rust
+impl PageTable {
+	// 从token获得当前进程的页表
+pub fn from_token(satp: usize) -> Self {
+        Self {
+            root_ppn: PhysPageNum::from(satp & ((1usize << 44) - 1)),
+            frames: Vec::new(),
+        }
+    }
+	// 从VPN索引PTE 若不存在就创建
+	fn find_pte_create(&mut self, vpn: VirtPageNum) -> Option<&mut PageTableEntry> {
+		// vpn[0..3]
+        let idxs = vpn.indexes();
+        let mut ppn = self.root_ppn;
+        let mut result: Option<&mut PageTableEntry> = None;
+        for (i, idx) in idxs.iter().enumerate() {
+            let pte = &mut ppn.get_pte_array()[*idx];
+			// 若VPN[2]存在 则找到
+            if i == 2 {
+                result = Some(pte);
+                break;
+            }
+			// 若不存在 则创建
+            if !pte.is_valid() {
+                let frame = frame_alloc().unwrap();
+                *pte = PageTableEntry::new(frame.ppn, PTEFlags::V);
+                self.frames.push(frame);
+            }
+            ppn = pte.ppn();
+        }
+        result
+    }
+	
+}
+
+```
+
+
+把**连续的虚拟内存** 拆成 **可能不连续的物理内存**
+```rust
+
+pub fn translated_byte_buffer(token: usize, ptr: *const u8, len: usize) -> Vec<&'static mut [u8]> {
+    let page_table = PageTable::from_token(token);
+    let mut start = ptr as usize;
+    let end = start + len;
+    let mut v = Vec::new();
+    while start < end {
+        let start_va = VirtAddr::from(start);
+        let mut vpn = start_va.floor();
+        let ppn = page_table.translate(vpn).unwrap().ppn();
+        vpn.step();
+        let mut end_va: VirtAddr = vpn.into();
+        end_va = end_va.min(VirtAddr::from(end));
+        if end_va.page_offset() == 0 {
+            v.push(&mut ppn.get_bytes_array()[start_va.page_offset()..]);
+        } else {
+            v.push(&mut ppn.get_bytes_array()[start_va.page_offset()..end_va.page_offset()]);
+        }
+        start = end_va.into();
+    }
+    v
+}
 
 ```
