@@ -343,7 +343,6 @@ extern "C" fn rust_main() -> ! {
             for i in 0..2 {
                 let slot = &mut *core::ptr::addr_of_mut!(INPUT_CONTEXTS[i]);
                 if let Some(input) = slot.as_mut() {
-                    input.ack_interrupt();
                     while let Some(event) = input.pop_pending_event() {
                         if event.event_type == 1 { // EV_KEY
                             if event.code < 256 {
