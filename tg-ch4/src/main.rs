@@ -222,7 +222,6 @@ extern "C" fn rust_main() -> ! {
             MEMORY - layout.len(),
         ))
     };
-    println!("[KERNEL] Heap initialized");
     // 第四步：分配异界传送门的物理页面
 
     // 传送门大小需要适配 1 个 slot（对应 1 个并发切换）
@@ -230,9 +229,8 @@ extern "C" fn rust_main() -> ! {
     let portal_layout = Layout::from_size_align(portal_size, 1 << Sv39::PAGE_BITS).unwrap();
     let portal_ptr = unsafe { alloc(portal_layout) };
     assert!(portal_layout.size() < 1 << Sv39::PAGE_BITS);
-    // 第五步：建立内核地址空间（恒等映射 + 传送门映射）
+    // 第五步：建立内核地址空间（恒等映射 +传送门映射）
     let mut ks = kernel_space(layout, MEMORY, portal_ptr as _);
-    println!("[KERNEL] Address space initialized");
     let portal_idx = PROTAL_TRANSIT.index_in(Sv39::MAX_LEVEL);
 
     // 第六步：加载用户程序
@@ -701,12 +699,9 @@ mod impls {
         /// 返回旧的 break 地址，失败返回 -1。
         fn sbrk(&self, caller: Caller, size: i32) -> isize {
             if let Some(process) = unsafe { PROCESSES.get_mut() }.get_mut(caller.entity) {
-                let old_brk = process.program_brk;
                 if let Some(ret) = process.change_program_brk(size as isize) {
-                    // log::info!("sbrk: entity={}, size={}, old_brk={:#x}, new_brk={:#x}", caller.entity, size, old_brk, process.program_brk);
                     ret as isize
                 } else {
-                    log::error!("sbrk failed: entity={}, size={}, brk={:#x}", caller.entity, size, old_brk);
                     -1
                 }
             } else {
