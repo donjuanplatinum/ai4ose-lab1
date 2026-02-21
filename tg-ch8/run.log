@@ -1,0 +1,49 @@
+   Compiling tg-ch8 v0.4.2-preview.1 (/home/donjuan/git/ai4ose-lab1/tg-ch8)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 8.62s
+     Running `qemu-system-riscv64 -machine virt -bios none -m 256M -serial stdio -display sdl -drive file=target/riscv64gc-unknown-none-elf/debug/fs.img,if=none,format=raw,id=x0 -device virtio-blk-device,drive=x0,bus=virtio-mmio-bus.0 -device virtio-gpu-device,xres=640,yres=400,bus=virtio-mmio-bus.1 -device virtio-keyboard-device,bus=virtio-mmio-bus.2 -device virtio-mouse-device,bus=virtio-mmio-bus.3 -kernel target/riscv64gc-unknown-none-elf/debug/tg-ch8`
+[DEBUG] rust_main: BSS cleared and console initialized
+
+   ______                       __
+  / ____/___  ____  _________  / /__
+ / /   / __ \/ __ \/ ___/ __ \/ / _ \
+/ /___/ /_/ / / / (__  ) /_/ / /  __/
+\____/\____/_/ /_/____/\____/_/\___/
+====================================
+[90m[TRACE] LOG TEST >> Hello, world![0m
+[32m[DEBUG] LOG TEST >> Hello, world![0m
+[34m[ INFO] LOG TEST >> Hello, world![0m
+[93m[ WARN] LOG TEST >> Hello, world![0m
+[31m[ERROR] LOG TEST >> Hello, world![0m
+
+[34m[ INFO] .text ----> 0x80200000..0x80255000[0m
+[34m[ INFO] .rodata --> 0x80255000..0x80269000[0m
+[34m[ INFO] .data ----> 0x80269000..0x80a6c908[0m
+[34m[ INFO] .boot ----> 0x80a6d000..0x80a8d000[0m
+[34m[ INFO] (heap) ---> 0x80a8d000..0x88200000[0m
+
+[KERNEL] Initializing VirtIO devices...
+[34m[ INFO] Found VirtIO-GPU at 0x10002000, initializing...[0m
+[32m[DEBUG] Device features: Features(EDID | NOTIFY_ON_EMPTY | ANY_LAYOUT | RING_INDIRECT_DESC | RING_EVENT_IDX)[0m
+[34m[ INFO] events_read: 0x0, num_scanouts: 0x1[0m
+[DMA] static_alloc: pages=2, size=8192, ptr=0x8026a000
+[DMA] static_alloc: pages=2, size=8192, ptr=0x8026c000
+[34m[ INFO] => RespDisplayInfo { header: CtrlHeader { hdr_type: Command(4353), flags: 0, fence_id: 0, ctx_id: 0, _padding: 0 }, rect: Rect { x: 0, y: 0, width: 640, height: 400 }, enabled: 1, flags: 0 }[0m
+[DMA] static_alloc: pages=250, size=1024000, ptr=0x8026e000
+[34m[ INFO] VirtIO-GPU initialized: 640x400, fb_ptr=0x8026e000[0m
+[32m[DEBUG] Device features: Feature(NOTIFY_ON_EMPTY | ANY_LAYOUT | RING_INDIRECT_DESC | RING_EVENT_IDX)[0m
+[DMA] static_alloc: pages=2, size=8192, ptr=0x80368000
+[DMA] static_alloc: pages=2, size=8192, ptr=0x8036a000
+[34m[ INFO] VirtIO-Input device #0 initialized at 0x10003000[0m
+[32m[DEBUG] Device features: Feature(NOTIFY_ON_EMPTY | ANY_LAYOUT | RING_INDIRECT_DESC | RING_EVENT_IDX)[0m
+[DMA] static_alloc: pages=2, size=8192, ptr=0x8036c000
+[DMA] static_alloc: pages=2, size=8192, ptr=0x8036e000
+[34m[ INFO] VirtIO-Input device #1 initialized at 0x10004000[0m
+[DEBUG] Opening initproc...
+[DEBUG] BLOCK_DEVICE: Lazy initialization starting...
+[DEBUG] BLOCK_DEVICE: Transport created, type: Block
+[32m[DEBUG] Device features: BlkFeature(SEG_MAX | GEOMETRY | BLK_SIZE | SCSI | FLUSH | TOPOLOGY | CONFIG_WCE | DISCARD | WRITE_ZEROES | NOTIFY_ON_EMPTY | RING_INDIRECT_DESC | RING_EVENT_IDX)[0m
+[34m[ INFO] config: 0x10001100[0m
+[34m[ INFO] found a block device of size 65536KB[0m
+[DMA] static_alloc: pages=2, size=8192, ptr=0x80370000
+[DEBUG] BLOCK_DEVICE: VirtIOBlk instance created!
+[DEBUG] Reading initproc...

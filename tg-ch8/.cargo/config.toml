@@ -1,0 +1,28 @@
+# 交叉编译目标：RISC-V 64 位裸机
+[build]
+target = "riscv64gc-unknown-none-elf"
+
+# QEMU 运行配置 (含 VirtIO-GPU + VirtIO-Input)
+[target.riscv64gc-unknown-none-elf]
+runner = [
+    "qemu-system-riscv64",
+    "-machine",
+    "virt",
+    "-bios",
+    "none",
+    "-m",
+    "256M",
+     "-serial", "stdio",                             # 串口输出到终端
+    "-display", "sdl",                              # SDL 图形窗口
+    "-drive",
+    "file=target/riscv64gc-unknown-none-elf/debug/fs.img,if=none,format=raw,id=x0",
+    "-device",
+    "virtio-blk-device,drive=x0,bus=virtio-mmio-bus.0",
+    "-device",
+    "virtio-gpu-device,xres=640,yres=400,bus=virtio-mmio-bus.1",
+    "-device",
+    "virtio-keyboard-device,bus=virtio-mmio-bus.2",
+    "-device",
+    "virtio-mouse-device,bus=virtio-mmio-bus.3",
+    "-kernel",
+]
