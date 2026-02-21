@@ -1,0 +1,261 @@
+Spawning qemu for Doom...
+[1m[92m   Compiling[0m tg-ch8 v0.4.2-preview.1 (/home/donjuan/git/ai4ose-lab1/tg-ch8)
+[1m[96m    Building[0m [=========================> ] 72/74: tg-ch8(build)               [1m[96m    Building[0m [=========================> ] 73/74: tg-ch8(bin)                 [K[1m[33mwarning[0m[1m: unused import: `alloc::alloc_zeroed`[0m
+  [1m[94m--> [0msrc/process.rs:30:13
+   [1m[94m|[0m
+[1m[94m30[0m [1m[94m|[0m use alloc::{alloc::alloc_zeroed, boxed::Box, sync::Arc, vec::Vec};
+   [1m[94m|[0m             [1m[33m^^^^^^^^^^^^^^^^^^^[0m
+   [1m[94m|[0m
+   [1m[94m= [0m[1mnote[0m: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+[1m[96m    Building[0m [=========================> ] 73/74: tg-ch8(bin)                 [K[1m[33mwarning[0m[1m: unused import: `core::alloc::Layout`[0m
+  [1m[94m--> [0msrc/process.rs:31:5
+   [1m[94m|[0m
+[1m[94m31[0m [1m[94m|[0m use core::alloc::Layout;
+   [1m[94m|[0m     [1m[33m^^^^^^^^^^^^^^^^^^^[0m
+
+[1m[33mwarning[0m[1m: unused import: `PPN`[0m
+  [1m[94m--> [0msrc/process.rs:35:34
+   [1m[94m|[0m
+[1m[94m35[0m [1m[94m|[0m     page_table::{MmuMeta, VAddr, PPN, VPN},
+   [1m[94m|[0m                                  [1m[33m^^^[0m
+
+[1m[96m    Building[0m [=========================> ] 73/74: tg-ch8(bin)                 [K[1m[33mwarning[0m[1m: unused variable: `condvar`[0m
+    [1m[94m--> [0msrc/main.rs:1090:17
+     [1m[94m|[0m
+[1m[94m1090[0m [1m[94m|[0m             let condvar = Arc::clone(current_proc.condvar_list[condvar[1m[94m...[0m
+     [1m[94m|[0m                 [1m[33m^^^^^^^[0m [1m[33mhelp: if this is intentional, prefix it with an underscore: `_condvar`[0m
+     [1m[94m|[0m
+     [1m[94m= [0m[1mnote[0m: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+[1m[96m    Building[0m [=========================> ] 73/74: tg-ch8(bin)                 [K[1m[33mwarning[0m[1m: constant `PAGE_MASK` is never used[0m
+  [1m[94m--> [0msrc/process.rs:48:7
+   [1m[94m|[0m
+[1m[94m48[0m [1m[94m|[0m const PAGE_MASK: usize = PAGE_SIZE - 1;
+   [1m[94m|[0m       [1m[33m^^^^^^^^^[0m
+   [1m[94m|[0m
+   [1m[94m= [0m[1mnote[0m: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+[1m[96m    Building[0m [=========================> ] 73/74: tg-ch8(bin)                 [K[1m[33mwarning[0m: `tg-ch8` (bin "tg-ch8") generated 5 warnings (run `cargo fix --bin "tg-ch8" -p tg-ch8` to apply 4 suggestions)
+[1m[92m    Finished[0m ]8;;https://doc.rust-lang.org/cargo/reference/profiles.html#default-profiles\`dev` profile [unoptimized + debuginfo]]8;;\ target(s) in 8.77s
+[1m[92m     Running[0m `qemu-system-riscv64 -machine virt -bios none -m 256M -serial stdio -display sdl -drive file=target/riscv64gc-unknown-none-elf/debug/fs.img,if=none,format=raw,id=x0 -device virtio-blk-device,drive=x0,bus=virtio-mmio-bus.0 -device virtio-gpu-device,xres=640,yres=400,bus=virtio-mmio-bus.1 -device virtio-keyboard-device,bus=virtio-mmio-bus.2 -device virtio-mouse-device,bus=virtio-mmio-bus.3 -kernel target/riscv64gc-unknown-none-elf/debug/tg-ch8`
+[DEBUG] rust_main: BSS cleared and console initialized
+
+   ______                       __
+  / ____/___  ____  _________  / /__
+ / /   / __ \/ __ \/ ___/ __ \/ / _ \
+/ /___/ /_/ / / / (__  ) /_/ / /  __/
+\____/\____/_/ /_/____/\____/_/\___/
+====================================
+[90m[TRACE] LOG TEST >> Hello, world![0m
+[32m[DEBUG] LOG TEST >> Hello, world![0m
+[34m[ INFO] LOG TEST >> Hello, world![0m
+[93m[ WARN] LOG TEST >> Hello, world![0m
+[31m[ERROR] LOG TEST >> Hello, world![0m
+
+[34m[ INFO] .text ----> 0x80200000..0x80256000[0m
+[34m[ INFO] .rodata --> 0x80256000..0x8026a000[0m
+[34m[ INFO] .data ----> 0x8026a000..0x80e6c988[0m
+[34m[ INFO] .boot ----> 0x80e6d000..0x80e8d000[0m
+[34m[ INFO] (heap) ---> 0x80e8d000..0x90200000[0m
+
+[KERNEL] Initializing VirtIO devices...
+[34m[ INFO] Found VirtIO-GPU at 0x10002000, initializing...[0m
+[32m[DEBUG] Device features: Features(EDID | NOTIFY_ON_EMPTY | ANY_LAYOUT | RING_INDIRECT_DESC | RING_EVENT_IDX)[0m
+[34m[ INFO] events_read: 0x0, num_scanouts: 0x1[0m
+[DMA] static_alloc: pages=2, size=8192, ptr=0x8026b000
+[DMA] static_alloc: pages=2, size=8192, ptr=0x8026d000
+[34m[ INFO] => RespDisplayInfo { header: CtrlHeader { hdr_type: Command(4353), flags: 0, fence_id: 0, ctx_id: 0, _padding: 0 }, rect: Rect { x: 0, y: 0, width: 640, height: 400 }, enabled: 1, flags: 0 }[0m
+[DMA] static_alloc: pages=250, size=1024000, ptr=0x8026f000
+[34m[ INFO] VirtIO-GPU initialized: 640x400, fb_ptr=0x8026f000[0m
+[32m[DEBUG] Device features: Feature(NOTIFY_ON_EMPTY | ANY_LAYOUT | RING_INDIRECT_DESC | RING_EVENT_IDX)[0m
+[DMA] static_alloc: pages=2, size=8192, ptr=0x80369000
+[DMA] static_alloc: pages=2, size=8192, ptr=0x8036b000
+[34m[ INFO] VirtIO-Input device #0 initialized at 0x10003000[0m
+[32m[DEBUG] Device features: Feature(NOTIFY_ON_EMPTY | ANY_LAYOUT | RING_INDIRECT_DESC | RING_EVENT_IDX)[0m
+[DMA] static_alloc: pages=2, size=8192, ptr=0x8036d000
+[DMA] static_alloc: pages=2, size=8192, ptr=0x8036f000
+[34m[ INFO] VirtIO-Input device #1 initialized at 0x10004000[0m
+[DEBUG] Opening initproc...
+[DEBUG] BLOCK_DEVICE: Lazy initialization starting...
+[DEBUG] BLOCK_DEVICE: Transport created, type: Block
+[32m[DEBUG] Device features: BlkFeature(SEG_MAX | GEOMETRY | BLK_SIZE | SCSI | FLUSH | TOPOLOGY | CONFIG_WCE | DISCARD | WRITE_ZEROES | NOTIFY_ON_EMPTY | RING_INDIRECT_DESC | RING_EVENT_IDX)[0m
+[34m[ INFO] config: 0x10001100[0m
+[34m[ INFO] found a block device of size 65536KB[0m
+[DMA] static_alloc: pages=2, size=8192, ptr=0x80371000
+[DEBUG] BLOCK_DEVICE: VirtIOBlk instance created!
+[DEBUG] Reading initproc...
+[DEBUG] initproc read (size=1345488), loading ELF...
+Rust user shell
+>> Shell detected, sending doom...
+doom
+doom
+[34m[ INFO] Opened /dev/input as fd 3[0m
+[34m[ INFO] Opened /dev/gpu as fd 4[0m
+                           Doom Generic 0.1
+Z_Init: Init zone memory allocation daemon. 
+zone memory: 0x19f6f0, 800000 allocated for zone
+[Z_Init] sizeof(memblock_t)=40, sizeof(memzone_t)=56, zone=0x19f6f0, size=8388608
+Using . for configuration and saves
+V_Init: allocate screens.
+M_LoadDefaults: Load system defaults.
+saving config in .default.cfg
+W_Init: Init WADfiles.
+ adding doom1.wad
+[WAD] file length=4196020, numlumps=1264, infotableofs=4175796, dir_size=20224
+[WAD] Total lumps: 1264
+[WAD] lump[0] = "PLAYPAL" pos=12 size=10752
+[WAD] lump[1] = "COLORMAP" pos=10764 size=8704
+[WAD] lump[2] = "ENDOOM" pos=19468 size=4000
+[WAD] lump[3] = "DEMO1" pos=23468 size=20118
+[WAD] lump[4] = "DEMO2" pos=43588 size=15358
+[WAD] lump[5] = "DEMO3" pos=58948 size=8550
+[WAD] lump[6] = "E1M1" pos=67500 size=0
+[WAD] lump[7] = "THINGS" pos=67500 size=1380
+[WAD] lump[8] = "LINEDEFS" pos=68880 size=6650
+[WAD] lump[9] = "SIDEDEFS" pos=75532 size=19440
+[DEBUG] Found font lump: STCFN033
+[DEBUG] Found font lump: STCFN034
+[DEBUG] Found font lump: STCFN035
+[DEBUG] Found font lump: STCFN036
+[DEBUG] Found font lump: STCFN037
+[DEBUG] Total STCFN font lumps found: 64
+[WAD] ...
+[WAD] lump[1261] = "F_SKY1" pos=4171700 size=4096
+[WAD] lump[1262] = "F1_END" pos=0 size=0
+[WAD] lump[1263] = "F_END" pos=0 size=0
+Using ./.savegame/ for savegames
+===========================================================================
+                            DOOM Shareware
+===========================================================================
+ Doom Generic is free software, covered by the GNU General Public
+ License.  There is NO warranty; not even for MERCHANTABILITY or FITNESS
+ FOR A PARTICULAR PURPOSE. You are welcome to change and distribute
+ copies under certain conditions. See the source for more information.
+===========================================================================
+I_Init: Setting up machine state.
+M_Init: Init miscellaneous info.
+R_Init: Init DOOM refresh daemon - ...................
+P_Init: Init Playloop state.
+S_Init: Setting up sound.
+D_CheckNetGame: Checking network game status.
+startskill 2  deathmatch: 0  startmap: 1  startepisode: 1
+player 1 of 1 (1 nodes)
+Emulating the behavior of the 'Doom 1.9' executable.
+HU_Init: Setting up heads up display.
+HU_Init: Lump STCFN33 NOT FOUND
+HU_Init: Lump STCFN34 NOT FOUND
+HU_Init: Lump STCFN35 NOT FOUND
+HU_Init: Lump STCFN36 NOT FOUND
+HU_Init: Lump STCFN37 NOT FOUND
+HU_Init: Lump STCFN38 NOT FOUND
+HU_Init: Lump STCFN39 NOT FOUND
+HU_Init: Lump STCFN40 NOT FOUND
+HU_Init: Lump STCFN41 NOT FOUND
+HU_Init: Lump STCFN42 NOT FOUND
+HU_Init: Lump STCFN43 NOT FOUND
+HU_Init: Lump STCFN44 NOT FOUND
+HU_Init: Lump STCFN45 NOT FOUND
+HU_Init: Lump STCFN46 NOT FOUND
+HU_Init: Lump STCFN47 NOT FOUND
+HU_Init: Lump STCFN48 NOT FOUND
+HU_Init: Lump STCFN49 NOT FOUND
+HU_Init: Lump STCFN50 NOT FOUND
+HU_Init: Lump STCFN51 NOT FOUND
+HU_Init: Lump STCFN52 NOT FOUND
+HU_Init: Lump STCFN53 NOT FOUND
+HU_Init: Lump STCFN54 NOT FOUND
+HU_Init: Lump STCFN55 NOT FOUND
+HU_Init: Lump STCFN56 NOT FOUND
+HU_Init: Lump STCFN57 NOT FOUND
+HU_Init: Lump STCFN58 NOT FOUND
+HU_Init: Lump STCFN59 NOT FOUND
+HU_Init: Lump STCFN60 NOT FOUND
+HU_Init: Lump STCFN61 NOT FOUND
+HU_Init: Lump STCFN62 NOT FOUND
+HU_Init: Lump STCFN63 NOT FOUND
+HU_Init: Lump STCFN64 NOT FOUND
+HU_Init: Lump STCFN65 NOT FOUND
+HU_Init: Lump STCFN66 NOT FOUND
+HU_Init: Lump STCFN67 NOT FOUND
+HU_Init: Lump STCFN68 NOT FOUND
+HU_Init: Lump STCFN69 NOT FOUND
+HU_Init: Lump STCFN70 NOT FOUND
+HU_Init: Lump STCFN71 NOT FOUND
+HU_Init: Lump STCFN72 NOT FOUND
+HU_Init: Lump STCFN73 NOT FOUND
+HU_Init: Lump STCFN74 NOT FOUND
+HU_Init: Lump STCFN75 NOT FOUND
+HU_Init: Lump STCFN76 NOT FOUND
+HU_Init: Lump STCFN77 NOT FOUND
+HU_Init: Lump STCFN78 NOT FOUND
+HU_Init: Lump STCFN79 NOT FOUND
+HU_Init: Lump STCFN80 NOT FOUND
+HU_Init: Lump STCFN81 NOT FOUND
+HU_Init: Lump STCFN82 NOT FOUND
+HU_Init: Lump STCFN83 NOT FOUND
+HU_Init: Lump STCFN84 NOT FOUND
+HU_Init: Lump STCFN85 NOT FOUND
+HU_Init: Lump STCFN86 NOT FOUND
+HU_Init: Lump STCFN87 NOT FOUND
+HU_Init: Lump STCFN88 NOT FOUND
+HU_Init: Lump STCFN89 NOT FOUND
+HU_Init: Lump STCFN90 NOT FOUND
+HU_Init: Lump STCFN91 NOT FOUND
+HU_Init: Lump STCFN92 NOT FOUND
+HU_Init: Lump STCFN93 NOT FOUND
+HU_Init: Lump STCFN94 NOT FOUND
+HU_Init: Lump STCFN95 NOT FOUND
+ST_Init: Init status bar.
+I_InitGraphics: framebuffer: x_res: 640, y_res: 400, x_virtual: 640, y_virtual: 400, bpp: 32
+I_InitGraphics: framebuffer: RGBA: 8888, red_off: 16, green_off: 8, blue_off: 0, transp_off: 24
+I_InitGraphics: DOOM screen size: w x h: 320 x 200
+I_InitGraphics: Auto-scaling factor: 2
+[31m[ERROR] unsupported trap: Exception(LoadPageFault)[0m
+[31m[ERROR] stval = 0x3[0m
+[31m[ERROR] sepc  = 0x30e18[0m
+Shell: Process 3 exited with code -3
+>> Traceback (most recent call last):
+  File "/home/donjuan/git/ai4ose-lab1/tg-ch8/run_doom2.py", line 12, in <module>
+    child.expect('doomgeneric_tick')
+    ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^
+  File "/home/donjuan/pyrightvenv/lib/python3.13/site-packages/pexpect/spawnbase.py", line 354, in expect
+    return self.expect_list(compiled_pattern_list,
+           ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^
+            timeout, searchwindowsize, async_)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/donjuan/pyrightvenv/lib/python3.13/site-packages/pexpect/spawnbase.py", line 383, in expect_list
+    return exp.expect_loop(timeout)
+           ~~~~~~~~~~~~~~~^^^^^^^^^
+  File "/home/donjuan/pyrightvenv/lib/python3.13/site-packages/pexpect/expect.py", line 181, in expect_loop
+    return self.timeout(e)
+           ~~~~~~~~~~~~^^^
+  File "/home/donjuan/pyrightvenv/lib/python3.13/site-packages/pexpect/expect.py", line 144, in timeout
+    raise exc
+pexpect.exceptions.TIMEOUT: Timeout exceeded.
+<pexpect.pty_spawn.spawn object at 0x7f90e80d81a0>
+command: /home/donjuan/.cargo/bin/cargo
+args: [b'/home/donjuan/.cargo/bin/cargo', b'run']
+buffer (last 100 chars): '[ERROR] stval = 0x3\x1b[0m\r\n\x1b[31m[ERROR] sepc  = 0x30e18\x1b[0m\r\nShell: Process 3 exited with code -3\r\n>> '
+before (last 100 chars): '[ERROR] stval = 0x3\x1b[0m\r\n\x1b[31m[ERROR] sepc  = 0x30e18\x1b[0m\r\nShell: Process 3 exited with code -3\r\n>> '
+after: <class 'pexpect.exceptions.TIMEOUT'>
+match: None
+match_index: None
+exitstatus: None
+flag_eof: False
+pid: 139063
+child_fd: 5
+closed: False
+timeout: 120
+delimiter: <class 'pexpect.exceptions.EOF'>
+logfile: <_io.TextIOWrapper name='<stdout>' mode='w' encoding='utf-8'>
+logfile_read: None
+logfile_send: None
+maxread: 2000
+ignorecase: False
+searchwindowsize: None
+delaybeforesend: 0.05
+delayafterclose: 0.1
+delayafterterminate: 0.1
+searcher: searcher_re:
+    0: re.compile('doomgeneric_tick')

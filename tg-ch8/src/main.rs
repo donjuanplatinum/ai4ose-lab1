@@ -1089,7 +1089,14 @@ mod impls {
             let current_proc = unsafe { (*processor).get_current_proc().unwrap() };
             let condvar = Arc::clone(current_proc.condvar_list[condvar_id].as_ref().unwrap());
             let mutex = Arc::clone(current_proc.mutex_list[mutex_id].as_ref().unwrap());
-            let (flag, waking_tid) = condvar.wait_with_mutex(tid, mutex);
+            
+            // Re-implement `wait_with_mutex` correctly:
+            // 1. Unlock the mutex and get the thread to wake up (if any)
+            let waking_tid = mutex.unlock();
+            
+            // 2. Lock the mutex immediately (busy-wait style semantics matching tg-sync's teaching implementation)
+            let flag = mutex.lock(tid);
+            
             if let Some(waking_tid) = waking_tid {
                 unsafe { (*processor).re_enque(waking_tid); }
             }
