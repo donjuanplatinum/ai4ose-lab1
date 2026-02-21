@@ -104,6 +104,10 @@ pub enum Fd {
         /// 是否可写
         write: bool,
     },
+    /// VirtIO GPU 帧缓冲
+    VirtioGpu,
+    /// VirtIO 输入设备
+    VirtioInput,
 }
 
 impl Fd {
@@ -114,6 +118,8 @@ impl Fd {
             Fd::PipeRead(_) => true,
             Fd::PipeWrite(_) => false,
             Fd::Empty { read, .. } => *read,
+            Fd::VirtioGpu => false, // GPU is typically write-only via this interface
+            Fd::VirtioInput => true,
         }
     }
 
@@ -124,6 +130,8 @@ impl Fd {
             Fd::PipeRead(_) => false,
             Fd::PipeWrite(_) => true,
             Fd::Empty { write, .. } => *write,
+            Fd::VirtioGpu => true,
+            Fd::VirtioInput => false,
         }
     }
 
@@ -132,6 +140,11 @@ impl Fd {
         match self {
             Fd::File(f) => f.read(buf),
             Fd::PipeRead(p) => p.read(buf),
+            Fd::VirtioInput => {
+                // Implementation will be in main.rs because it needs access to KEY_STATES
+                // We'll leave a placeholder here or move the logic
+                -2 // Special code for special device
+            }
             _ => -1,
         }
     }
@@ -141,6 +154,10 @@ impl Fd {
         match self {
             Fd::File(f) => f.write(buf),
             Fd::PipeWrite(p) => p.write(buf),
+            Fd::VirtioGpu => {
+                // Implementation will be in main.rs
+                -2 // Special code for special device
+            }
             _ => -1,
         }
     }

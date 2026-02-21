@@ -1,0 +1,34 @@
+Spawning qemu for ch8b_usertest...
+[1m[92m   Compiling[0m tg-ch8 v0.4.2-preview.1 (/home/donjuan/git/ai4ose-lab1/tg-ch8)
+[1m[96m    Building[0m [=========================> ] 72/74: tg-ch8(build)               [1m[96m    Building[0m [=========================> ] 73/74: tg-ch8(bin)                 [K[1m[92m    Finished[0m ]8;;https://doc.rust-lang.org/cargo/reference/profiles.html#default-profiles\`dev` profile [unoptimized + debuginfo]]8;;\ target(s) in 11.36s
+[1m[92m     Running[0m `qemu-system-riscv64 -machine virt -bios none -m 256M -serial stdio -display sdl -drive file=target/riscv64gc-unknown-none-elf/debug/fs.img,if=none,format=raw,id=x0 -device virtio-blk-device,drive=x0,bus=virtio-mmio-bus.0 -device virtio-gpu-device,xres=640,yres=400,bus=virtio-mmio-bus.1 -device virtio-keyboard-device,bus=virtio-mmio-bus.2 -device virtio-mouse-device,bus=virtio-mmio-bus.3 -kernel target/riscv64gc-unknown-none-elf/debug/tg-ch8`
+qemu-system-riscv64: -device virtio-blk-device,drive=x0,bus=virtio-mmio-bus.0: Failed to get "write" lock
+Is another process using the image [target/riscv64gc-unknown-none-elf/debug/fs.img]?
+
+[ERROR] End Of File (EOF). Exception style platform.
+<pexpect.pty_spawn.spawn object at 0x7fdda86d81a0>
+command: /home/donjuan/.cargo/bin/cargo
+args: [b'/home/donjuan/.cargo/bin/cargo', b'run']
+buffer (last 100 chars): ''
+before (last 100 chars): '"write" lock\r\nIs another process using the image [target/riscv64gc-unknown-none-elf/debug/fs.img]?\r\n'
+after: <class 'pexpect.exceptions.EOF'>
+match: None
+match_index: None
+exitstatus: None
+flag_eof: True
+pid: 96024
+child_fd: 5
+closed: False
+timeout: 600
+delimiter: <class 'pexpect.exceptions.EOF'>
+logfile: <_io.TextIOWrapper name='<stdout>' mode='w' encoding='utf-8'>
+logfile_read: None
+logfile_send: None
+maxread: 2000
+ignorecase: False
+searchwindowsize: None
+delaybeforesend: 0.05
+delayafterclose: 0.1
+delayafterterminate: 0.1
+searcher: searcher_re:
+    0: re.compile('Rust user shell\r\n>> ')

@@ -44,6 +44,8 @@ use xmas_elf::{
     program, ElfFile,
 };
 
+const PAGE_SIZE: usize = 4096;
+
 /// 线程（执行单元）
 ///
 /// 每个线程有独立的 TID 和上下文（寄存器状态、satp）。
@@ -151,36 +153,63 @@ impl Process {
             _ => None?,
         };
 
-        const PAGE_SIZE: usize = 1 << Sv39::PAGE_BITS;
-        const PAGE_MASK: usize = PAGE_SIZE - 1;
-
         let mut address_space = AddressSpace::new();
         for program in elf.program_iter() {
             if !matches!(program.get_type(), Ok(program::Type::Load)) { continue; }
             let off_file = program.offset() as usize;
             let len_file = program.file_size() as usize;
             let off_mem = program.virtual_addr() as usize;
-            let end_mem = off_mem + program.mem_size() as usize;
-            assert_eq!(off_file & PAGE_MASK, off_mem & PAGE_MASK);
+            let len_mem = program.mem_size() as usize;
+            
             let mut flags: [u8; 5] = *b"U___V";
             if program.flags().is_execute() { flags[1] = b'X'; }
             if program.flags().is_write() { flags[2] = b'W'; }
             if program.flags().is_read() { flags[3] = b'R'; }
-            address_space.map(
-                VAddr::new(off_mem).floor()..VAddr::new(end_mem).ceil(),
-                &elf.input[off_file..][..len_file],
-                off_mem & PAGE_MASK,
-                parse_flags(unsafe { core::str::from_utf8_unchecked(&flags) }).unwrap(),
-            );
+            let vm_flags = parse_flags(unsafe { core::str::from_utf8_unchecked(&flags) }).unwrap();
+
+            let vaddr_start = VAddr::new(off_mem).floor();
+            let vaddr_end = VAddr::new(off_mem + len_mem).ceil();
+            
+            let mut curr_vaddr = vaddr_start;
+            while curr_vaddr < vaddr_end {
+                let vaddr_val = curr_vaddr.base().val();
+                
+                // Determine how much of the file data belongs to this page
+                let mut page_data: [u8; PAGE_SIZE] = [0u8; PAGE_SIZE];
+                
+                let page_start_mem = vaddr_val;
+                let page_end_mem = vaddr_val + PAGE_SIZE;
+                
+                let overlap_start = off_mem.max(page_start_mem);
+                let overlap_end = (off_mem + len_file).min(page_end_mem);
+                
+                if overlap_start < overlap_end {
+                    let data_len = overlap_end - overlap_start;
+                    let file_off = off_file + (overlap_start - off_mem);
+                    page_data[overlap_start - page_start_mem .. overlap_end - page_start_mem]
+                        .copy_from_slice(&elf.input[file_off..file_off + data_len]);
+                }
+                
+                // Map a single page. 
+                // Note: AddressSpace::map with a range of 1 page will allocate 1 physical page.
+                address_space.map(
+                    curr_vaddr..curr_vaddr + 1,
+                    &page_data[overlap_start.saturating_sub(page_start_mem) .. overlap_end.saturating_sub(page_start_mem)],
+                    overlap_start.saturating_sub(vaddr_val),
+                    vm_flags,
+                );
+                
+                curr_vaddr += 1;
+            }
         }
-        // 分配 2 页用户栈
+        // 分配 128 页用户栈 (512 KiB)
         let stack = unsafe {
             alloc_zeroed(Layout::from_size_align_unchecked(
-                2 << Sv39::PAGE_BITS, 1 << Sv39::PAGE_BITS,
+                128 << Sv39::PAGE_BITS, 1 << Sv39::PAGE_BITS,
             ))
         };
         address_space.map_extern(
-            VPN::new((1 << 26) - 2)..VPN::new(1 << 26),
+            VPN::new((1 << 26) - 128)..VPN::new(1 << 26),
             PPN::new(stack as usize >> Sv39::PAGE_BITS),
             build_flags("U_WRV"),
         );

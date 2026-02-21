@@ -74,7 +74,7 @@ use customizable_buddy::{BuddyAllocator, LinkedListBuddy, UsizeBuddy};
 use spin::Mutex;
 
 /// 自定义全局堆分配器，使用本地打过补丁的 customizable-buddy
-struct LockedHeap(Mutex<BuddyAllocator<20, UsizeBuddy, LinkedListBuddy>>);
+struct LockedHeap(Mutex<BuddyAllocator<26, UsizeBuddy, LinkedListBuddy>>);
 
 unsafe impl Send for LockedHeap {}
 unsafe impl Sync for LockedHeap {}
@@ -178,11 +178,11 @@ unsafe extern "C" fn _start() -> ! {
     )
 }
 
-/// 物理内存容量 = 128 MiB
-const MEMORY: usize = 128 << 20;
+/// 物理内存容量 = 256 MiB
+const MEMORY: usize = 256 << 20;
 /// 堆分配器元数据（避开代码段）
 #[unsafe(link_section = ".data")]
-static mut HEAP_META: [u8; 4096] = [1u8; 4096];
+static mut HEAP_META: [u8; 1024 * 1024] = [1u8; 1024 * 1024];
 /// 异界传送门所在虚页
 const PROTAL_TRANSIT: VPN<Sv39> = VPN::MAX;
 
@@ -234,11 +234,11 @@ extern "C" fn rust_main() -> ! {
     println!("[DEBUG] rust_main: BSS cleared and console initialized");
     tg_console::test_log();
     // 步骤 3：堆分配器
-    ALLOCATOR.0.lock().init(12, NonNull::new(unsafe { HEAP_META.as_mut_ptr() as _ }).unwrap());
+    ALLOCATOR.0.lock().init(20, NonNull::new(unsafe { HEAP_META.as_mut_ptr() as _ }).unwrap());
     unsafe {
         ALLOCATOR.0.lock().transfer(
             NonNull::new(0x81000000 as *mut u8).unwrap(),
-            112 * 1024 * 1024,
+            200 * 1024 * 1024,
         )
     };
     // 步骤 4：异界传送门
@@ -383,6 +383,8 @@ extern "C" fn rust_main() -> ! {
                 }
                 e => {
                     log::error!("unsupported trap: {e:?}");
+                    log::error!("stval = {:#x}", stval::read());
+                    log::error!("sepc  = {:#x}", sepc::read());
                     unsafe { (*processor).make_current_exited(-3) };
                 }
             }
@@ -522,12 +524,31 @@ mod impls {
             *flags |= Self::OWNED;
             let ptr: *mut u8 = Self::page_alloc(len);
             if ptr.is_null() {
-                tg_console::println!("[DEBUG] allocate failed! requested len (pages): {}", len);
+                panic!("[DEBUG] allocate failed! requested len (pages): {}", len);
             }
             NonNull::new(ptr).unwrap()
         }
-        fn deallocate(&mut self, _pte: Pte<Sv39>, _len: usize) -> usize { todo!() }
-        fn drop_root(&mut self) { todo!() }
+        fn deallocate(&mut self, pte: Pte<Sv39>, len: usize) -> usize {
+            if self.check_owned(pte) {
+                let ppn = pte.ppn();
+                let ptr = self.p_to_v::<u8>(ppn).as_ptr();
+                unsafe {
+                    alloc::alloc::dealloc(
+                        ptr,
+                        Layout::from_size_align_unchecked(len << Sv39::PAGE_BITS, 1 << Sv39::PAGE_BITS),
+                    );
+                }
+            }
+            0
+        }
+        fn drop_root(&mut self) {
+            unsafe {
+                alloc::alloc::dealloc(
+                    self.0.as_ptr() as _,
+                    Layout::from_size_align_unchecked(1 << Sv39::PAGE_BITS, 1 << Sv39::PAGE_BITS),
+                );
+            }
+        }
     }
 
     // ─── 控制台 ───
@@ -563,67 +584,72 @@ mod impls {
                     });
                     return count as _;
                 } else {
-                    log::error!("ptr not readable");
+                    log::error!("sys_write: buffer at {:#x} not readable", buf);
                     return -1;
                 }
-            } else if fd == 4 {
-                // ── Framebuffer write (fd=4) Page-By-Page ──
-                unsafe {
-                    if !crate::FB_PTR.is_null() {
-                        let mut count_left = count.min(crate::FB_LEN);
-                        let mut buf_addr = buf;
-                        let mut fb_offset = 0;
-
-                        while count_left > 0 {
-                            if let Some(ptr) = current.address_space.translate::<u8>(VAddr::new(buf_addr), READABLE) {
-                                let page_offset = buf_addr % 4096;
-                                let copy_size = count_left.min(4096 - page_offset);
-                                core::ptr::copy_nonoverlapping(
-                                    ptr.as_ptr(),
-                                    crate::FB_PTR.add(fb_offset),
-                                    copy_size,
-                                );
-                                count_left -= copy_size;
-                                buf_addr += copy_size;
-                                fb_offset += copy_size;
-                            } else {
-                                log::error!("GPU blit error: pointer unreadable at {:#x}", buf_addr);
-                                break;
-                            }
-                        }
-                        
-                        if let Some(gpu) = crate::GPU_CONTEXT.as_mut() {
-                            if let Err(e) = gpu.flush() {
-                                log::error!("GPU flush failed: {:?}", e);
-                            }
-                        }
-                    }
-                }
-                return count as _;
             } else if let Some(file) = &current.fd_table[fd] {
-                let file = file.lock();
-                if file.writable() {
-                    let mut v: Vec<&'static mut [u8]> = Vec::new();
-                    let mut count_left = count;
-                    let mut buf_addr = buf;
-                    while count_left > 0 {
-                        if let Some(ptr) = current.address_space.translate::<u8>(VAddr::new(buf_addr), READABLE) {
-                            let page_offset = buf_addr % 4096;
-                            let copy_size = count_left.min(4096 - page_offset);
+                let file_guard = file.lock();
+                if file_guard.writable() {
+                    match &*file_guard {
+                        Fd::VirtioGpu => {
+                            // ── Framebuffer write Page-By-Page ──
                             unsafe {
-                                v.push(core::slice::from_raw_parts_mut(ptr.as_ptr(), copy_size));
+                                if !crate::FB_PTR.is_null() {
+                                    let mut count_left = count.min(crate::FB_LEN);
+                                    let mut buf_addr = buf;
+                                    let mut fb_offset = 0;
+
+                                    while count_left > 0 {
+                                        if let Some(ptr) = current.address_space.translate::<u8>(VAddr::new(buf_addr), READABLE) {
+                                            let page_offset = buf_addr % 4096;
+                                            let copy_size = count_left.min(4096 - page_offset);
+                                            core::ptr::copy_nonoverlapping(
+                                                ptr.as_ptr(),
+                                                crate::FB_PTR.add(fb_offset),
+                                                copy_size,
+                                            );
+                                            count_left -= copy_size;
+                                            buf_addr += copy_size;
+                                            fb_offset += copy_size;
+                                        } else {
+                                            log::error!("GPU blit error: pointer unreadable at {:#x}", buf_addr);
+                                            break;
+                                        }
+                                    }
+                                    
+                                    if let Some(gpu) = crate::GPU_CONTEXT.as_mut() {
+                                        if let Err(e) = gpu.flush() {
+                                            log::error!("GPU flush failed: {:?}", e);
+                                        }
+                                    }
+                                }
                             }
-                            count_left -= copy_size;
-                            buf_addr += copy_size;
-                        } else {
-                            log::error!("write: pointer unreadable at {:#x}", buf_addr);
-                            break;
+                            return count as _;
+                        }
+                        _ => {
+                            let mut v: Vec<&'static mut [u8]> = Vec::new();
+                            let mut count_left = count;
+                            let mut buf_addr = buf;
+                            while count_left > 0 {
+                                if let Some(ptr) = current.address_space.translate::<u8>(VAddr::new(buf_addr), READABLE) {
+                                    let page_offset = buf_addr % 4096;
+                                    let copy_size = count_left.min(4096 - page_offset);
+                                    unsafe {
+                                        v.push(core::slice::from_raw_parts_mut(ptr.as_ptr(), copy_size));
+                                    }
+                                    count_left -= copy_size;
+                                    buf_addr += copy_size;
+                                } else {
+                                    log::error!("write: translation failed at {:#x}", buf_addr);
+                                    break;
+                                }
+                            }
+                            if v.is_empty() { return -1; }
+                            return file_guard.write(UserBuffer::new(v)) as _;
                         }
                     }
-                    if v.is_empty() { return -1; }
-                    return file.write(UserBuffer::new(v)) as _;
                 } else {
-                    log::error!("file not writable");
+                    log::error!("sys_write: file at fd {} not writable", fd);
                     return -1;
                 }
             } else {
@@ -643,48 +669,52 @@ mod impls {
                     }
                     return count as _;
                 } else {
-                    log::error!("ptr not writeable");
-                    return -1;
-                }
-            } else if fd == 3 {
-                // ── VirtIO-Input KEY_STATES read (fd=3) ──
-                if let Some(ptr) = current.address_space.translate::<u8>(VAddr::new(buf), WRITEABLE) {
-                    unsafe {
-                        let dst = core::slice::from_raw_parts_mut(ptr.as_ptr(), count.min(256));
-                        for i in 0..count.min(256) {
-                            dst[i] = if crate::KEY_STATES[i] { 1 } else { 0 };
-                        }
-                    }
-                    return count as _;
-                } else {
-                    log::error!("ptr not writeable");
+                    log::error!("sys_read: buffer at {:#x} not writeable", buf);
                     return -1;
                 }
             } else if let Some(file) = &current.fd_table[fd] {
-                let file = file.lock();
-                if file.readable() {
-                    let mut v: Vec<&'static mut [u8]> = Vec::new();
-                    let mut count_left = count;
-                    let mut buf_addr = buf;
-                    
-                    while count_left > 0 {
-                        if let Some(ptr) = current.address_space.translate::<u8>(VAddr::new(buf_addr), WRITEABLE) {
-                            let page_offset = buf_addr % 4096;
-                            let copy_size = count_left.min(4096 - page_offset);
-                            unsafe {
-                                v.push(core::slice::from_raw_parts_mut(ptr.as_ptr(), copy_size));
+                let file_guard = file.lock();
+                if file_guard.readable() {
+                    match &*file_guard {
+                        Fd::VirtioInput => {
+                            // ── VirtIO-Input KEY_STATES read ──
+                            if let Some(ptr) = current.address_space.translate::<u8>(VAddr::new(buf), WRITEABLE) {
+                                unsafe {
+                                    let dst = core::slice::from_raw_parts_mut(ptr.as_ptr(), count.min(256));
+                                    for i in 0..count.min(256) {
+                                        dst[i] = if crate::KEY_STATES[i] { 1 } else { 0 };
+                                    }
+                                }
+                                return count as _;
+                            } else {
+                                log::error!("sys_read: Input buffer at {:#x} not writeable", buf);
+                                return -1;
                             }
-                            count_left -= copy_size;
-                            buf_addr += copy_size;
-                        } else {
-                            log::error!("read: translation failed at {:#x}", buf_addr);
-                            break;
+                        }
+                        _ => {
+                            let mut v: Vec<&'static mut [u8]> = Vec::new();
+                            let mut count_left = count;
+                            let mut buf_addr = buf;
+                            while count_left > 0 {
+                                if let Some(ptr) = current.address_space.translate::<u8>(VAddr::new(buf_addr), WRITEABLE) {
+                                    let page_offset = buf_addr % 4096;
+                                    let copy_size = count_left.min(4096 - page_offset);
+                                    unsafe {
+                                        v.push(core::slice::from_raw_parts_mut(ptr.as_ptr(), copy_size));
+                                    }
+                                    count_left -= copy_size;
+                                    buf_addr += copy_size;
+                                } else {
+                                    log::error!("read: translation failed at {:#x}", buf_addr);
+                                    break;
+                                }
+                            }
+                            if v.is_empty() { return -1; }
+                            return file_guard.read(UserBuffer::new(v)) as _;
                         }
                     }
-                    if v.is_empty() { return -1; }
-                    return file.read(UserBuffer::new(v)) as _;
                 } else {
-                    log::error!("file not readable");
+                    log::error!("sys_read: file at fd {} not readable", fd);
                     return -1;
                 }
             } else {
@@ -695,16 +725,33 @@ mod impls {
 
         fn open(&self, _caller: Caller, path: usize, flags: usize) -> isize {
             let current = PROCESSOR.get_mut().get_current_proc().unwrap();
-            if let Some(ptr) = current.address_space.translate(VAddr::new(path), READABLE) {
+            if let Some(_ptr) = current.address_space.translate::<u8>(VAddr::new(path), READABLE) {
                 let mut string = String::new();
-                let mut raw_ptr: *mut u8 = ptr.as_ptr();
+                let mut vaddr = path;
                 loop {
-                    unsafe {
-                        let ch = *raw_ptr;
-                        if ch == 0 { break; }
-                        string.push(ch as char);
-                        raw_ptr = (raw_ptr as usize + 1) as *mut u8;
+                    if let Some(ptr) = current.address_space.translate(VAddr::new(vaddr), READABLE) {
+                        unsafe {
+                            let ch: u8 = *ptr.as_ptr();
+                            if ch == 0 { break; }
+                            string.push(ch as char);
+                        }
+                        vaddr += 1;
+                    } else {
+                        log::error!("sys_open: path string unreadable at {:#x}", vaddr);
+                        return -1;
                     }
+                }
+                if string == "/dev/gpu" {
+                    let new_fd = current.fd_table.len();
+                    current.fd_table.push(Some(Mutex::new(Fd::VirtioGpu)));
+                    log::info!("Opened /dev/gpu as fd {}", new_fd);
+                    return new_fd as isize;
+                }
+                if string == "/dev/input" {
+                    let new_fd = current.fd_table.len();
+                    current.fd_table.push(Some(Mutex::new(Fd::VirtioInput)));
+                    log::info!("Opened /dev/input as fd {}", new_fd);
+                    return new_fd as isize;
                 }
                 if let Some(file_handle) =
                     FS.open(string.as_str(), OpenFlags::from_bits(flags as u32).unwrap())
@@ -713,7 +760,7 @@ mod impls {
                     current.fd_table.push(Some(Mutex::new(Fd::File((*file_handle).clone()))));
                     new_fd as isize
                 } else { -1 }
-            } else { log::error!("ptr not writeable"); -1 }
+            } else { log::error!("sys_open: path at {:#x} not readable", path); -1 }
         }
 
         #[inline]
