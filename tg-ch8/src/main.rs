@@ -74,7 +74,7 @@ use customizable_buddy::{BuddyAllocator, LinkedListBuddy, UsizeBuddy};
 use spin::Mutex;
 
 /// 自定义全局堆分配器，使用本地打过补丁的 customizable-buddy
-struct LockedHeap(Mutex<BuddyAllocator<26, UsizeBuddy, LinkedListBuddy>>);
+struct LockedHeap(Mutex<BuddyAllocator<28, UsizeBuddy, LinkedListBuddy>>);
 
 unsafe impl Send for LockedHeap {}
 unsafe impl Sync for LockedHeap {}
@@ -182,7 +182,7 @@ unsafe extern "C" fn _start() -> ! {
 const MEMORY: usize = 256 << 20;
 /// 堆分配器元数据（避开代码段）
 #[unsafe(link_section = ".data")]
-static mut HEAP_META: [u8; 1024 * 1024] = [1u8; 1024 * 1024];
+static mut HEAP_META: [u8; 4 * 1024 * 1024] = [1u8; 4 * 1024 * 1024];
 /// 异界传送门所在虚页
 const PROTAL_TRANSIT: VPN<Sv39> = VPN::MAX;
 
@@ -234,7 +234,7 @@ extern "C" fn rust_main() -> ! {
     println!("[DEBUG] rust_main: BSS cleared and console initialized");
     tg_console::test_log();
     // 步骤 3：堆分配器
-    ALLOCATOR.0.lock().init(20, NonNull::new(unsafe { HEAP_META.as_mut_ptr() as _ }).unwrap());
+    ALLOCATOR.0.lock().init(5, NonNull::new(unsafe { HEAP_META.as_mut_ptr() as _ }).unwrap());
     unsafe {
         ALLOCATOR.0.lock().transfer(
             NonNull::new(0x81000000 as *mut u8).unwrap(),

@@ -45,6 +45,7 @@ use xmas_elf::{
 };
 
 const PAGE_SIZE: usize = 4096;
+const PAGE_MASK: usize = PAGE_SIZE - 1;
 
 /// 线程（执行单元）
 ///
@@ -93,8 +94,8 @@ impl Process {
     ///
     /// 注意：只支持单线程进程执行 exec
     pub fn exec(&mut self, elf: ElfFile) {
-        let (proc, thread) = Process::from_elf(elf).unwrap();
-        self.address_space = proc.address_space;
+        let (mut proc, thread) = Process::from_elf(elf).unwrap();
+        core::mem::swap(&mut self.address_space, &mut proc.address_space);
         let processor: *mut ProcessorInner = PROCESSOR.get_mut() as *mut ProcessorInner;
         unsafe {
             let pthreads = (*processor).get_thread(self.pid).unwrap();
@@ -202,17 +203,20 @@ impl Process {
                 curr_vaddr += 1;
             }
         }
-        // 分配 128 页用户栈 (512 KiB)
-        let stack = unsafe {
-            alloc_zeroed(Layout::from_size_align_unchecked(
-                128 << Sv39::PAGE_BITS, 1 << Sv39::PAGE_BITS,
-            ))
-        };
-        address_space.map_extern(
-            VPN::new((1 << 26) - 128)..VPN::new(1 << 26),
-            PPN::new(stack as usize >> Sv39::PAGE_BITS),
-            build_flags("U_WRV"),
-        );
+        // 分配 128 页用户栈 (512 KiB)，逐页映射以便正确生命周期管理和 fork 复制
+        let stack_vpn_start = VPN::<Sv39>::new((1 << 26) - 128);
+        let stack_vpn_end = VPN::<Sv39>::new(1 << 26);
+        let mut curr_vpn = stack_vpn_start;
+        let zero_page = [0u8; 4096];
+        while curr_vpn < stack_vpn_end {
+            address_space.map(
+                curr_vpn .. curr_vpn + 1,
+                &zero_page,
+                0,
+                build_flags("U_WRV"),
+            );
+            curr_vpn += 1;
+        }
         map_portal(&address_space);
         let satp = (8 << 60) | address_space.root_ppn().val();
         let mut context = LocalContext::user(entry);
@@ -238,5 +242,23 @@ impl Process {
             },
             thread,
         ))
+    }
+}
+
+impl Drop for Process {
+    fn drop(&mut self) {
+        use alloc::alloc::dealloc;
+        use core::alloc::Layout;
+        use tg_kernel_vm::page_table::{Sv39, VmFlags};
+        
+        for range in &self.address_space.areas {
+            let count = range.end.val() - range.start.val();
+            let layout = unsafe {
+                Layout::from_size_align_unchecked(count << Sv39::PAGE_BITS, 1 << Sv39::PAGE_BITS)
+            };
+            if let Some(ptr) = self.address_space.translate::<u8>(range.start.base(), unsafe { VmFlags::from_raw(0) }) {
+                unsafe { dealloc(ptr.as_ptr(), layout); }
+            }
+        }
     }
 }

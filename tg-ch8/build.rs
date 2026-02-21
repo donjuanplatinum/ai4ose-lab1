@@ -194,6 +194,7 @@ fn easy_fs_pack(
             .read(true)
             .write(true)
             .create(true)
+            .truncate(true)
             .open(fs_file)?;
         f.set_len(131072 * BLOCK_SZ as u64).unwrap();
         f
