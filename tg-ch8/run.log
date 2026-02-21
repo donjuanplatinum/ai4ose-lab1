@@ -1,5 +1,5 @@
 [1m[92m   Compiling[0m tg-ch8 v0.4.2-preview.1 (/home/donjuan/git/ai4ose-lab1/tg-ch8)
-[1m[96m    Building[0m [=========================> ] 72/74: tg-ch8(build)               [1m[96m    Building[0m [=========================> ] 73/74: tg-ch8(bin)                 [K[1m[92m    Finished[0m ]8;;https://doc.rust-lang.org/cargo/reference/profiles.html#default-profiles\`dev` profile [unoptimized + debuginfo]]8;;\ target(s) in 11.91s
+[1m[96m    Building[0m [========================>  ] 71/74: tg-ch8(build.rs)            [1m[96m    Building[0m [=========================> ] 72/74: tg-ch8(build)               [1m[96m    Building[0m [=========================> ] 73/74: tg-ch8(bin)                 [K[1m[92m    Finished[0m ]8;;https://doc.rust-lang.org/cargo/reference/profiles.html#default-profiles\`dev` profile [unoptimized + debuginfo]]8;;\ target(s) in 11.99s
 [1m[92m     Running[0m `qemu-system-riscv64 -machine virt -bios none -m 256M -serial stdio -display sdl -drive file=target/riscv64gc-unknown-none-elf/debug/fs.img,if=none,format=raw,id=x0 -device virtio-blk-device,drive=x0,bus=virtio-mmio-bus.0 -device virtio-gpu-device,xres=640,yres=400,bus=virtio-mmio-bus.1 -device virtio-keyboard-device,bus=virtio-mmio-bus.2 -device virtio-mouse-device,bus=virtio-mmio-bus.3 -kernel target/riscv64gc-unknown-none-elf/debug/tg-ch8`
 [DEBUG] rust_main: BSS cleared and console initialized
 
@@ -46,25 +46,49 @@
 [34m[ INFO] found a block device of size 65536KB[0m
 [DMA] static_alloc: pages=2, size=8192, ptr=0x80370000
 [DEBUG] BLOCK_DEVICE: VirtIOBlk instance created!
-[DEBUG] Reading initproc...
-[DEBUG] initproc read (size=1354256), loading ELF...
-Rust user shell
->> doom
-doom
-                           Doom Generic 0.1
-Z_Init: Init zone memory allocation daemon. 
-zone memory: 0x19f2b0, 700000 allocated for zone
-[Z_Init] sizeof(memblock_t)=40, sizeof(memzone_t)=56, zone=0x19f2b0, size=7340032
-Using . for configuration and saves
-V_Init: allocate screens.
-M_LoadDefaults: Load system defaults.
-saving config in .default.cfg
-W_Init: Init WADfiles.
- adding doom1.wad
-[WAD] file length=0, numlumps=1264, infotableofs=4175796, dir_size=20224
-
-[I_Error] Couldn't realloc lumpinfo
-Couldn't realloc lumpinfo
-
-Shell: Process 3 exited with code -1
->> 
+panicked at /home/donjuan/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tg-easy-fs-0.4.2-preview.1/src/efs.rs:89:17:
+Error loading EFS!
+Traceback (most recent call last):
+  File "/home/donjuan/git/ai4ose-lab1/tg-ch8/run_doom.py", line 7, in <module>
+    child.expect('Rust user shell\r\n>> ')
+    ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/donjuan/pyrightvenv/lib/python3.13/site-packages/pexpect/spawnbase.py", line 354, in expect
+    return self.expect_list(compiled_pattern_list,
+           ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^
+            timeout, searchwindowsize, async_)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/donjuan/pyrightvenv/lib/python3.13/site-packages/pexpect/spawnbase.py", line 383, in expect_list
+    return exp.expect_loop(timeout)
+           ~~~~~~~~~~~~~~~^^^^^^^^^
+  File "/home/donjuan/pyrightvenv/lib/python3.13/site-packages/pexpect/expect.py", line 179, in expect_loop
+    return self.eof(e)
+           ~~~~~~~~^^^
+  File "/home/donjuan/pyrightvenv/lib/python3.13/site-packages/pexpect/expect.py", line 122, in eof
+    raise exc
+pexpect.exceptions.EOF: End Of File (EOF). Exception style platform.
+<pexpect.pty_spawn.spawn object at 0x7f2758ad81a0>
+command: /home/donjuan/.cargo/bin/cargo
+args: [b'/home/donjuan/.cargo/bin/cargo', b'run']
+buffer (last 100 chars): ''
+before (last 100 chars): '/index.crates.io-1949cf8c6b5b557f/tg-easy-fs-0.4.2-preview.1/src/efs.rs:89:17:\r\nError loading EFS!\r\n'
+after: <class 'pexpect.exceptions.EOF'>
+match: None
+match_index: None
+exitstatus: None
+flag_eof: True
+pid: 361746
+child_fd: 5
+closed: False
+timeout: 60
+delimiter: <class 'pexpect.exceptions.EOF'>
+logfile: <_io.TextIOWrapper name='<stdout>' mode='w' encoding='utf-8'>
+logfile_read: None
+logfile_send: None
+maxread: 2000
+ignorecase: False
+searchwindowsize: None
+delaybeforesend: 0.05
+delayafterclose: 0.1
+delayafterterminate: 0.1
+searcher: searcher_re:
+    0: re.compile('Rust user shell\r\n>> ')
