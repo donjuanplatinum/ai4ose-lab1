@@ -178,8 +178,8 @@ unsafe extern "C" fn _start() -> ! {
     )
 }
 
-/// 物理内存容量 = 48 MiB
-const MEMORY: usize = 48 << 20;
+/// 物理内存容量 = 128 MiB
+const MEMORY: usize = 128 << 20;
 /// 堆分配器元数据（避开代码段）
 #[unsafe(link_section = ".data")]
 static mut HEAP_META: [u8; 4096] = [1u8; 4096];
@@ -237,8 +237,8 @@ extern "C" fn rust_main() -> ! {
     ALLOCATOR.0.lock().init(12, NonNull::new(unsafe { HEAP_META.as_mut_ptr() as _ }).unwrap());
     unsafe {
         ALLOCATOR.0.lock().transfer(
-            NonNull::new(0x80c00000 as *mut u8).unwrap(),
-            32 * 1024 * 1024,
+            NonNull::new(0x81000000 as *mut u8).unwrap(),
+            112 * 1024 * 1024,
         )
     };
     // 步骤 4：异界传送门
@@ -520,7 +520,11 @@ mod impls {
         #[inline]
         fn allocate(&mut self, len: usize, flags: &mut VmFlags<Sv39>) -> NonNull<u8> {
             *flags |= Self::OWNED;
-            NonNull::new(Self::page_alloc(len)).unwrap()
+            let ptr: *mut u8 = Self::page_alloc(len);
+            if ptr.is_null() {
+                tg_console::println!("[DEBUG] allocate failed! requested len (pages): {}", len);
+            }
+            NonNull::new(ptr).unwrap()
         }
         fn deallocate(&mut self, _pte: Pte<Sv39>, _len: usize) -> usize { todo!() }
         fn drop_root(&mut self) { todo!() }
