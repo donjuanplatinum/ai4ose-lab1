@@ -1,0 +1,333 @@
+Spawning qemu for ch8b_usertest...
+[1m[92m   Compiling[0m tg-ch8 v0.4.2-preview.1 (/home/donjuan/git/ai4ose-lab1/tg-ch8)
+[1m[96m    Building[0m [=========================> ] 72/74: tg-ch8(build)               [1m[96m    Building[0m [=========================> ] 73/74: tg-ch8(bin)                 [K[1m[33mwarning[0m[1m: unused import: `alloc::alloc_zeroed`[0m
+  [1m[94m--> [0msrc/process.rs:30:13
+   [1m[94m|[0m
+[1m[94m30[0m [1m[94m|[0m use alloc::{alloc::alloc_zeroed, boxed::Box, sync::Arc, vec::Vec};
+   [1m[94m|[0m             [1m[33m^^^^^^^^^^^^^^^^^^^[0m
+   [1m[94m|[0m
+   [1m[94m= [0m[1mnote[0m: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+[1m[96m    Building[0m [=========================> ] 73/74: tg-ch8(bin)                 [K[1m[33mwarning[0m[1m: unused import: `core::alloc::Layout`[0m
+  [1m[94m--> [0msrc/process.rs:31:5
+   [1m[94m|[0m
+[1m[94m31[0m [1m[94m|[0m use core::alloc::Layout;
+   [1m[94m|[0m     [1m[33m^^^^^^^^^^^^^^^^^^^[0m
+
+[1m[96m    Building[0m [=========================> ] 73/74: tg-ch8(bin)                 [K[1m[33mwarning[0m[1m: unused import: `PPN`[0m
+  [1m[94m--> [0msrc/process.rs:35:34
+   [1m[94m|[0m
+[1m[94m35[0m [1m[94m|[0m     page_table::{MmuMeta, VAddr, PPN, VPN},
+   [1m[94m|[0m                                  [1m[33m^^^[0m
+
+[1m[96m    Building[0m [=========================> ] 73/74: tg-ch8(bin)                 [K[1m[33mwarning[0m[1m: unused variable: `condvar`[0m
+    [1m[94m--> [0msrc/main.rs:1090:17
+     [1m[94m|[0m
+[1m[94m1090[0m [1m[94m|[0m             let condvar = Arc::clone(current_proc.condvar_list[condvar[1m[94m...[0m
+     [1m[94m|[0m                 [1m[33m^^^^^^^[0m [1m[33mhelp: if this is intentional, prefix it with an underscore: `_condvar`[0m
+     [1m[94m|[0m
+     [1m[94m= [0m[1mnote[0m: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+[1m[96m    Building[0m [=========================> ] 73/74: tg-ch8(bin)                 [K[1m[33mwarning[0m[1m: constant `PAGE_MASK` is never used[0m
+  [1m[94m--> [0msrc/process.rs:48:7
+   [1m[94m|[0m
+[1m[94m48[0m [1m[94m|[0m const PAGE_MASK: usize = PAGE_SIZE - 1;
+   [1m[94m|[0m       [1m[33m^^^^^^^^^[0m
+   [1m[94m|[0m
+   [1m[94m= [0m[1mnote[0m: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+[1m[96m    Building[0m [=========================> ] 73/74: tg-ch8(bin)                 [K[1m[33mwarning[0m: `tg-ch8` (bin "tg-ch8") generated 5 warnings (run `cargo fix --bin "tg-ch8" -p tg-ch8` to apply 4 suggestions)
+[1m[92m    Finished[0m ]8;;https://doc.rust-lang.org/cargo/reference/profiles.html#default-profiles\`dev` profile [unoptimized + debuginfo]]8;;\ target(s) in 8.97s
+[1m[92m     Running[0m `qemu-system-riscv64 -machine virt -bios none -m 256M -serial stdio -display sdl -drive file=target/riscv64gc-unknown-none-elf/debug/fs.img,if=none,format=raw,id=x0 -device virtio-blk-device,drive=x0,bus=virtio-mmio-bus.0 -device virtio-gpu-device,xres=640,yres=400,bus=virtio-mmio-bus.1 -device virtio-keyboard-device,bus=virtio-mmio-bus.2 -device virtio-mouse-device,bus=virtio-mmio-bus.3 -kernel target/riscv64gc-unknown-none-elf/debug/tg-ch8`
+[DEBUG] rust_main: BSS cleared and console initialized
+
+   ______                       __
+  / ____/___  ____  _________  / /__
+ / /   / __ \/ __ \/ ___/ __ \/ / _ \
+/ /___/ /_/ / / / (__  ) /_/ / /  __/
+\____/\____/_/ /_/____/\____/_/\___/
+====================================
+[90m[TRACE] LOG TEST >> Hello, world![0m
+[32m[DEBUG] LOG TEST >> Hello, world![0m
+[34m[ INFO] LOG TEST >> Hello, world![0m
+[93m[ WARN] LOG TEST >> Hello, world![0m
+[31m[ERROR] LOG TEST >> Hello, world![0m
+
+[34m[ INFO] .text ----> 0x80200000..0x80256000[0m
+[34m[ INFO] .rodata --> 0x80256000..0x8026a000[0m
+[34m[ INFO] .data ----> 0x8026a000..0x80e6c988[0m
+[34m[ INFO] .boot ----> 0x80e6d000..0x80e8d000[0m
+[34m[ INFO] (heap) ---> 0x80e8d000..0x90200000[0m
+
+[KERNEL] Initializing VirtIO devices...
+[34m[ INFO] Found VirtIO-GPU at 0x10002000, initializing...[0m
+[32m[DEBUG] Device features: Features(EDID | NOTIFY_ON_EMPTY | ANY_LAYOUT | RING_INDIRECT_DESC | RING_EVENT_IDX)[0m
+[34m[ INFO] events_read: 0x0, num_scanouts: 0x1[0m
+[DMA] static_alloc: pages=2, size=8192, ptr=0x8026b000
+[DMA] static_alloc: pages=2, size=8192, ptr=0x8026d000
+[34m[ INFO] => RespDisplayInfo { header: CtrlHeader { hdr_type: Command(4353), flags: 0, fence_id: 0, ctx_id: 0, _padding: 0 }, rect: Rect { x: 0, y: 0, width: 640, height: 400 }, enabled: 1, flags: 0 }[0m
+[DMA] static_alloc: pages=250, size=1024000, ptr=0x8026f000
+[34m[ INFO] VirtIO-GPU initialized: 640x400, fb_ptr=0x8026f000[0m
+[32m[DEBUG] Device features: Feature(NOTIFY_ON_EMPTY | ANY_LAYOUT | RING_INDIRECT_DESC | RING_EVENT_IDX)[0m
+[DMA] static_alloc: pages=2, size=8192, ptr=0x80369000
+[DMA] static_alloc: pages=2, size=8192, ptr=0x8036b000
+[34m[ INFO] VirtIO-Input device #0 initialized at 0x10003000[0m
+[32m[DEBUG] Device features: Feature(NOTIFY_ON_EMPTY | ANY_LAYOUT | RING_INDIRECT_DESC | RING_EVENT_IDX)[0m
+[DMA] static_alloc: pages=2, size=8192, ptr=0x8036d000
+[DMA] static_alloc: pages=2, size=8192, ptr=0x8036f000
+[34m[ INFO] VirtIO-Input device #1 initialized at 0x10004000[0m
+[DEBUG] Opening initproc...
+[DEBUG] BLOCK_DEVICE: Lazy initialization starting...
+[DEBUG] BLOCK_DEVICE: Transport created, type: Block
+[32m[DEBUG] Device features: BlkFeature(SEG_MAX | GEOMETRY | BLK_SIZE | SCSI | FLUSH | TOPOLOGY | CONFIG_WCE | DISCARD | WRITE_ZEROES | NOTIFY_ON_EMPTY | RING_INDIRECT_DESC | RING_EVENT_IDX)[0m
+[34m[ INFO] config: 0x10001100[0m
+[34m[ INFO] found a block device of size 65536KB[0m
+[DMA] static_alloc: pages=2, size=8192, ptr=0x80371000
+[DEBUG] BLOCK_DEVICE: VirtIOBlk instance created!
+[DEBUG] Reading initproc...
+[DEBUG] initproc read (size=1345488), loading ELF...
+Rust user shell
+>> Shell detected, sending ch8b_usertest...
+ch8b_usertest
+ch8b_usertest
+Usertests: Running 00hello_world
+Hello, world from user mode program!
+[32mUsertests: Test 00hello_world in Process 5 exited with code 0[0m
+Usertests: Running 05write_a
+AAAAAAAAAA [1/5]
+AAAAAAAAAA [2/5]
+AAAAAAAAAA [3/5]
+AAAAAAAAAA [4/5]
+AAAAAAAAAA [5/5]
+Test write A OK!
+[32mUsertests: Test 05write_a in Process 7 exited with code 0[0m
+Usertests: Running 06write_b
+BBBBBBBBBB [1/2]
+BBBBBBBBBB [2/2]
+Test write B OK!
+[32mUsertests: Test 06write_b in Process 9 exited with code 0[0m
+Usertests: Running 07write_c
+CCCCCCCCCC [1/3]
+CCCCCCCCCC [2/3]
+CCCCCCCCCC [3/3]
+Test write C OK!
+[32mUsertests: Test 07write_c in Process 11 exited with code 0[0m
+Usertests: Running 08power_3
+power_3 [10000/200000]
+power_3 [20000/200000]
+power_3 [30000/200000]
+power_3 [40000/200000]
+power_3 [50000/200000]
+power_3 [60000/200000]
+power_3 [70000/200000]
+power_3 [80000/200000]
+power_3 [90000/200000]
+power_3 [100000/200000]
+power_3 [110000/200000]
+power_3 [120000/200000]
+power_3 [130000/200000]
+power_3 [140000/200000]
+power_3 [150000/200000]
+power_3 [160000/200000]
+power_3 [170000/200000]
+power_3 [180000/200000]
+power_3 [190000/200000]
+power_3 [200000/200000]
+3^200000 = 871008973(MOD 998244353)
+Test power_3 OK!
+[32mUsertests: Test 08power_3 in Process 13 exited with code 0[0m
+Usertests: Running 09power_5
+power_5 [10000/140000]
+power_5 [20000/140000]
+power_5 [30000/140000]
+power_5 [40000/140000]
+power_5 [50000/140000]
+power_5 [60000/140000]
+power_5 [70000/140000]
+power_5 [80000/140000]
+power_5 [90000/140000]
+power_5 [100000/140000]
+power_5 [110000/140000]
+power_5 [120000/140000]
+power_5 [130000/140000]
+power_5 [140000/140000]
+5^140000 = 386471875(MOD 998244353)
+Test power_5 OK!
+[32mUsertests: Test 09power_5 in Process 15 exited with code 0[0m
+Usertests: Running 10power_7
+power_7 [10000/160000]
+power_7 [20000/160000]
+power_7 [30000/160000]
+power_7 [40000/160000]
+power_7 [50000/160000]
+power_7 [60000/160000]
+power_7 [70000/160000]
+power_7 [80000/160000]
+power_7 [90000/160000]
+power_7 [100000/160000]
+power_7 [110000/160000]
+power_7 [120000/160000]
+power_7 [130000/160000]
+power_7 [140000/160000]
+power_7 [150000/160000]
+power_7 [160000/160000]
+7^160000 = 667897727(MOD 998244353)
+Test power_7 OK!
+[32mUsertests: Test 10power_7 in Process 17 exited with code 0[0m
+Usertests: Running fork_exit
+I am the parent. Forking the child...
+I am the child.I am parent, fork a child pid 21
+
+I am the parent, waiting now..
+waitpid 21 ok.
+exit pass.
+[32mUsertests: Test fork_exit in Process 19 exited with code 0[0m
+Usertests: Running forktest_simple
+sys_wait without child process test passed!
+parent start, pid = 22!
+hello child process!ready waiting on parent process!
+
+child process pid = 24, exit code = 100
+[32mUsertests: Test forktest_simple in Process 22 exited with code 0[0m
+Usertests: Running 12forktest
+I am child 0forked child pid = 27
+
+I am child 1forked child pid = 28
+
+I am child 2forked child pid = 29
+
+I am child 3forked child pid = 30
+
+I am child 4forked child pid = 31
+
+I am child 5forked child pid = 32
+
+I am child 6forked child pid = 33
+
+I am child 7forked child pid = 34
+
+I am child 8forked child pid = 35
+
+I am child 9forked child pid = 36
+
+I am child 10forked child pid = 37
+
+I am child 11forked child pid = 38
+
+I am child 12forked child pid = 39
+
+I am child 13forked child pid = 40
+
+I am child 14forked child pid = 41
+
+I am child 15forked child pid = 42
+
+I am child 16forked child pid = 43
+
+I am child 17forked child pid = 44
+
+I am child 18forked child pid = 45
+
+I am child 19forked child pid = 46
+
+I am child 20forked child pid = 47
+
+I am child 21forked child pid = 48
+
+I am child 22forked child pid = 49
+
+I am child 23forked child pid = 50
+
+I am child 24forked child pid = 51
+
+I am child 25forked child pid = 52
+
+I am child 26forked child pid = 53
+
+I am child 27forked child pid = 54
+
+I am child 28forked child pid = 55
+
+I am child 29forked child pid = 56
+
+forktest pass.
+[32mUsertests: Test 12forktest in Process 25 exited with code 0[0m
+Usertests: Running filetest_simple
+file_test passed!
+[32mUsertests: Test filetest_simple in Process 57 exited with code 0[0m
+Usertests: Running cat_filea
+Hello, world!
+[32mUsertests: Test cat_filea in Process 59 exited with code 0[0m
+Usertests: Running pipetest
+Read OK, child process exited!
+pipetest passed!
+[32mUsertests: Test pipetest in Process 61 exited with code 0[0m
+Usertests: Running mpsc_sem
+0 1 2 3 0 1 2 3 0 1 2 3 0 1 2 3 0 1 2 3 0 1 2 3 0 1 2 3 0 1 2 3 0 1 2 3 0 1 2 3 0 1 2 3 0 1 2 3 0 1 2 3 0 1 2 3 0 1 2 3 0 1 2 3 0 1 2 3 0 1 2 3 0 1 2 3 0 1 2 3 0 1 2 3 0 1 2 3 0 1 2 3 0 1 2 3 0 1 2 3 0 1 2 3 0 1 2 3 0 1 2 3 0 1 2 3 0 1 2 3 0 1 2 3 0 1 2 3 0 1 2 3 0 1 2 3 0 1 2 3 0 1 2 3 0 1 2 3 0 1 2 3 0 1 2 3 0 1 2 3 0 1 2 3 0 1 2 3 0 1 2 3 0 1 2 3 0 1 2 3 0 1 2 3 0 1 2 3 0 1 2 3 0 1 2 3 0 1 2 3 0 1 2 3 0 1 2 3 0 1 2 3 0 1 2 3 0 1 2 3 0 1 2 3 0 1 2 3 0 1 2 3 0 1 2 3 0 1 2 3 0 1 2 3 0 1 2 3 0 1 2 3 0 1 2 3 0 1 2 3 0 1 2 3 0 1 2 3 0 1 2 3 0 1 2 3 0 1 2 3 0 1 2 3 0 1 2 3 0 1 2 3 0 1 2 3 0 1 2 3 0 1 2 3 0 1 2 3 0 1 2 3 0 1 2 3 0 1 2 3 0 1 2 3 0 1 2 3 0 1 2 3 0 1 2 3 0 1 2 3 0 1 2 3 0 1 2 3 0 1 2 3 0 1 2 3 0 1 2 3 0 1 2 3 0 1 2 3 0 1 2 3 0 1 2 3 0 1 2 3 0 1 2 3 0 1 2 3 0 1 2 3 0 1 2 3 0 1 2 3 
+mpsc_sem passed!
+[32mUsertests: Test mpsc_sem in Process 64 exited with code 0[0m
+Usertests: Running phil_din_mutex
+Here comes 5 philosophers!
+time cost = 3951
+'-' -> THINKING; 'x' -> EATING; ' ' -> WAITING 
+#0:                      --------------------------------------------                                                                                                                                                            xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx----------        xxxxx-----      xxxxxx---   xxxxx        
+#1:                                                                  -------------------------------------------------------------------                                                                                                                                                                                                             xxxxxxx--xxxxxxx-----------   xx---   xxxxxx             
+#2:                                                                                                                                     -----------------------------------------------------------------------------------------                                                                                                                  xx----------      xxx---- xxxxxx-------------          xxxx
+#3:                                                                                                                                                                                                                              ------------------------------------------------------------------------------------------------------------------  xxxxxxxxxxx------  xxxxx--------xxxxxxx--   xxxxxxxxx    
+#4:                                                                                                                                                                                                                                                                                                                                                ------       x------      xxxxxx--       xxxxx------   xx  
+#0:                      --------------------------------------------                                                                                                                                                            xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx----------        xxxxx-----      xxxxxx---   xxxxx        
+philosopher dining problem with mutex test passed!
+[32mUsertests: Test phil_din_mutex in Process 66 exited with code 0[0m
+Usertests: Running race_adder_mutex_blocking
+time cost is 33752ms
+race adder using spin mutex test passed!
+[32mUsertests: Test race_adder_mutex_blocking in Process 68 exited with code 0[0m
+Usertests: Running sync_sem
+Second want to continue,but need to wait firstFirst work and wakeup Second
+
+Second can work now
+sync_sem passed!
+[32mUsertests: Test sync_sem in Process 70 exited with code 0[0m
+Usertests: Running test_condvar
+Second want to continue,but need to wait A=1First work, Change A --> 1 and wakeup Second
+
+Second: A is 0
+A is 1, Second can work now
+test_condvar passed!
+[32mUsertests: Test test_condvar in Process 72 exited with code 0[0m
+Usertests: Running threads
+aababcv :[106, 107, 108]abc
+abccreate tid: 4abc
+abcabcbcreate tid: 4 endabcb
+abcbcreate tid: 5abcb
+abcbabcbbcreate tid: 5 endabcbb
+abcbbcreate tid: 6abcbb
+abcbbabcbbbcreate tid: 6 endabcbbb
+abcbbbcreate tid: 7abcbbb
+abcbbbabcbbbbcreate tid: 7 endabcbbbb
+abcbbbbcreate tid: 8abcbbbb
+abcbbbbabcbbbbbcreate tid: 8 endabcbbbbb
+abcbbbbbcreate endabcbbbbb
+abcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbabcbbbbbbcbbbbbcbbbbbbbbbbthread#106 exited with code 1bbbbb
+bbbbbbbbbbthread#107 exited with code 2bbbbb
+bbbbbbbbthread#108 exited with code 3bbbb
+bbbbbbbbthread#109 exited with code 2bbb
+bbbbbbthread#110 exited with code 2bbb
+bbbbbbbbbthread#111 exited with code 2bb
+bbbbbthread#112 exited with code 2b
+bthread#113 exited with code 2
+main thread exited.
+threads test passed!
+[32mUsertests: Test threads in Process 74 exited with code 0[0m
+Usertests: Running threads_arg
+aababcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcbccthread#116 exited with code 1
+thread#117 exited with code 2
+thread#118 exited with code 3
+main thread exited.
+threads with arg test passed!
+[32mUsertests: Test threads_arg in Process 76 exited with code 0[0m
+Basic usertests passed!
+Shell: Process 3 exited with code 0
+>> qemu-system-riscv64: terminating on signal 15 from pid 139046 (killall)
+
+[EOF] QEMU exited unexpectedly.
