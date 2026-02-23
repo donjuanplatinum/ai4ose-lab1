@@ -12,8 +12,9 @@ runner = [
     "none",
     "-m",
     "256M",
-    "-serial", "stdio",                             # 串口输出到终端
-    "-display", "sdl",                             
+    #"-serial", "stdio",                             # 串口输出到终端
+    #"-display", "sdl",       
+    "-nographic",                      
     "-drive",
     "file=target/riscv64gc-unknown-none-elf/debug/fs.img,if=none,format=raw,id=x0",
     "-device",

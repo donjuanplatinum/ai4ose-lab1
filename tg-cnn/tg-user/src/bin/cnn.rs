@@ -15,54 +15,81 @@ use user_lib::*;
 
 #[derive(Module, Debug)]
 pub struct Model<B: Backend> {
-    conv1: Conv2d<B>,
-    conv2: Conv2d<B>,
-    pool: AdaptiveAvgPool2d,
-    fc1: Linear<B>,
-    pub fc2_weight: Tensor<B, 2>,
-    pub fc2_bias: Tensor<B, 1>,
-    relu: Relu,
+    pub conv1_w: Tensor<B, 4>,
+    pub conv1_b: Tensor<B, 1>,
+    pub conv2_w: Tensor<B, 4>,
+    pub conv2_b: Tensor<B, 1>,
+    pub fc1_w: Tensor<B, 2>,
+    pub fc1_b: Tensor<B, 1>,
+    pub fc2_w: Tensor<B, 2>,
+    pub fc2_b: Tensor<B, 1>,
 }
 
 impl<B: Backend> Model<B> {
     pub fn new(device: &B::Device) -> Self {
-        let conv1 = Conv2dConfig::new([1, 8], [3, 3]).init(device);
-        let conv2 = Conv2dConfig::new([8, 16], [3, 3]).init(device);
-        let pool = AdaptiveAvgPool2dConfig::new([7, 7]).init();
-        let fc1 = LinearConfig::new(16 * 7 * 7, 128).init(device);
+        // [修改 1] 改进初始化：使用 Kaiming 正态分布，根据输入连接数 (fan_in) 缩放
+        // Conv1: fan_in = 1 * 3 * 3 = 9. std = sqrt(2/fan_in) ≈ 0.47
+        let conv1_w = Tensor::random([8, 1, 3, 3], burn::tensor::Distribution::Normal(0.0, 0.47), device);
+        let conv1_b = Tensor::zeros([8], device);
         
-        // Manual weights for the last layer to allow manual optimization
-        let fc2_weight = Tensor::<B, 2>::random([128, 10], burn::tensor::Distribution::Default, device);
-        let fc2_bias = Tensor::<B, 1>::zeros([10], device);
+        // Conv2: fan_in = 8 * 3 * 3 = 72. std = sqrt(2/fan_in) ≈ 0.16
+        let conv2_w = Tensor::random([16, 8, 3, 3], burn::tensor::Distribution::Normal(0.0, 0.16), device);
+        let conv2_b = Tensor::zeros([16], device);
         
-        let relu = Relu::new();
+        // FC1: fan_in = 16 * 7 * 7 = 784. std = sqrt(2/fan_in) ≈ 0.05
+        let fc1_w = Tensor::random([16 * 7 * 7, 128], burn::tensor::Distribution::Normal(0.0, 0.05), device);
+        let fc1_b = Tensor::zeros([128], device);
+        
+        // FC2: fan_in = 128. std = sqrt(2/fan_in) ≈ 0.125
+        let fc2_w = Tensor::random([128, 10], burn::tensor::Distribution::Normal(0.0, 0.125), device);
+        let fc2_b = Tensor::zeros([10], device);
 
         Self {
-            conv1,
-            conv2,
-            pool,
-            fc1,
-            fc2_weight,
-            fc2_bias,
-            relu,
+            conv1_w,
+            conv1_b,
+            conv2_w,
+            conv2_b,
+            fc1_w,
+            fc1_b,
+            fc2_w,
+            fc2_b,
         }
     }
 
-    pub fn forward(&self, input: Tensor<B, 4>) -> (Tensor<B, 2>, Tensor<B, 2>) {
-        let x = self.conv1.forward(input);
-        let x = self.relu.forward(x);
-        let x = self.conv2.forward(x);
-        let x = self.relu.forward(x);
-        let x = self.pool.forward(x);
-        let x = x.flatten(1, 3);
-        let x = self.fc1.forward(x);
-        let features = self.relu.forward(x);
+    pub fn forward_all(&self, input: Tensor<B, 4>) -> (
+        Tensor<B, 2>, // output (logits)
+        Tensor<B, 4>, // c1_relu
+        Tensor<B, 4>, // c2_relu
+        Tensor<B, 4>, // pool
+        Tensor<B, 2>, // fc1_relu
+        Tensor<B, 4>  // input (saved)
+    ) {
+        let options = burn::tensor::ops::ConvOptions::new([1, 1], [1, 1], [1, 1], 1);
         
-        // Manual Linear layer: y = x * W + b
-        // Output shape: [batch_size, 10]
-        // Explicitly unsqueeze bias for broadcasting [10] -> [1, 10]
-        let output = features.clone().matmul(self.fc2_weight.clone()).add(self.fc2_bias.clone().unsqueeze_dim(0));
-        (output, features)
+        // Conv1
+        let c1 = burn::tensor::module::conv2d(input.clone(), self.conv1_w.clone(), Some(self.conv1_b.clone()), options.clone());
+        let c1_relu = burn::nn::Relu::new().forward(c1);
+
+        // Conv2
+        let c2 = burn::tensor::module::conv2d(c1_relu.clone(), self.conv2_w.clone(), Some(self.conv2_b.clone()), options);
+        let c2_relu = burn::nn::Relu::new().forward(c2);
+
+        // Pool (28x28 -> 7x7 using 4x4 blocks, stride 4 implicitly via adaptive)
+        let pool = burn::tensor::module::adaptive_avg_pool2d(c2_relu.clone(), [7, 7]);
+        let flattened = pool.clone().flatten(1, 3);
+
+        // FC1
+        let fc1 = flattened.matmul(self.fc1_w.clone()).add(self.fc1_b.clone().unsqueeze_dim(0));
+        let fc1_relu = burn::nn::Relu::new().forward(fc1);
+
+        // FC2 (logits)
+        let fc2 = fc1_relu.clone().matmul(self.fc2_w.clone()).add(self.fc2_b.clone().unsqueeze_dim(0));
+
+        (fc2, c1_relu, c2_relu, pool, fc1_relu, input)
+    }
+    
+    pub fn forward(&self, input: Tensor<B, 4>) -> Tensor<B, 2> {
+        self.forward_all(input).0
     }
 }
 
@@ -72,7 +99,8 @@ fn load_mnist_data(num_images: usize) -> (Vec<f32>, Vec<u8>) {
     let mut labels = Vec::with_capacity(num_images);
 
     // Load images
-    let fd_img = open("train-images-subset-ubyte\0", OpenFlags::RDONLY);
+    let fname_img = "train-images-subset-ubyte\0";
+    let fd_img = open(fname_img, OpenFlags::RDONLY);
     if fd_img < 0 {
         panic!("Failed to open train-images-subset-ubyte");
     }
@@ -90,7 +118,8 @@ fn load_mnist_data(num_images: usize) -> (Vec<f32>, Vec<u8>) {
     close(fd_img as usize);
 
     // Load labels
-    let fd_lbl = open("train-labels-subset-ubyte\0", OpenFlags::RDONLY);
+    let fname_lbl = "train-labels-subset-ubyte\0";
+    let fd_lbl = open(fname_lbl, OpenFlags::RDONLY);
     if fd_lbl < 0 {
         panic!("Failed to open train-labels-subset-ubyte");
     }
@@ -128,7 +157,7 @@ fn print_progress(current: usize, total: usize, loss: f32) {
 
 #[no_mangle]
 pub fn main() -> i32 {
-    println!("CNN Training on MNIST starting (Manual MSE SGD)...");
+    println!("CNN Training on MNIST starting (Full Manual Backprop)...");
 
     type MyBackend = NdArray<f32>;
     let device = Default::default();
@@ -136,10 +165,11 @@ pub fn main() -> i32 {
 
     println!("Model initialized.");
 
+    // [修改 2] 提升数据集大小
     let total_images = 2000;
     let (images, labels) = load_mnist_data(total_images);
     
-    // Split into train (80%) and test (20%)
+    // Split into train (1600) and test (400)
     let num_train = 1600;
     let num_test = 400;
     
@@ -151,9 +181,10 @@ pub fn main() -> i32 {
     println!("Dataset split: {} training, {} testing", num_train, num_test);
     println!("Training loop started...");
 
-    let batch_size = 32;
-    let epochs = 5;
-    let learning_rate = 0.01;
+    let batch_size = 16;
+    let epochs = 20;
+    // [修改 3] 学习率微调
+    let lr = 0.05; 
     let num_batches = num_train / batch_size;
 
     for epoch in 1..=epochs {
@@ -170,7 +201,6 @@ pub fn main() -> i32 {
                 &device,
             );
 
-            // One-hot encoding for MSE
             let mut one_hot_data = Vec::with_capacity(batch_size * 10);
             for i in 0..batch_size {
                 let label = train_labels[start + i];
@@ -183,30 +213,93 @@ pub fn main() -> i32 {
                 &device
             );
 
-            let (output, features) = model.forward(input);
+            let (output, c1_relu, c2_relu, pool, fc1_relu, _) = model.forward_all(input.clone());
             
-            // Manual MSE Loss: mean((output - targets)^2)
-            let loss = output.clone().sub(targets.clone()).powf_scalar(2.0).mean();
-            let loss_val = loss.clone().into_scalar();
+            // 1. 计算 softmax 概率
+            let max_logits = output.clone().max_dim(1).detach();
+            let exp_logits = output.clone().sub(max_logits).exp();
+            let sum_exp = exp_logits.clone().sum_dim(1);
+            let probs = exp_logits.div(sum_exp);
+
+            // 2. 计算 CE Loss
+            let log_probs = probs.clone().add_scalar(1e-7).log();
+            let loss = targets.clone().mul(log_probs).sum_dim(1).mean().mul_scalar(-1.0);
+            let loss_val = loss.into_scalar();
             epoch_loss += loss_val;
 
-            // Manual SGD for the last layer (fc2)
-            // Grad(output) = (output - targets) / batch_size
-            let output_grad = output.sub(targets).div_scalar(batch_size as f32);
+            // --- FULL BACKWARD PASS ---
             
-            // Grad(W) = features^T * output_grad
-            let weight_grad = features.transpose().matmul(output_grad.clone());
+            // Softmax + CrossEntropy Gradient: dL/dz = (probs - targets) / batch_size
+            let d_output = probs.sub(targets).div_scalar(batch_size as f32);
+
+            // 1. FC2
+            let d_fc2_w = fc1_relu.clone().transpose().matmul(d_output.clone());
+            let d_fc2_b = d_output.clone().sum_dim(0).reshape([10]);
+            let d_fc1_relu_raw = d_output.matmul(model.fc2_w.clone().transpose());
+
+            // 2. FC1
+            let mask1 = fc1_relu.clone().lower_equal(Tensor::zeros_like(&fc1_relu));
+            let d_fc1 = d_fc1_relu_raw.mask_where(mask1, Tensor::zeros_like(&fc1_relu));
+            let flattened = pool.clone().flatten(1, 3);
+            let d_fc1_w = flattened.transpose().matmul(d_fc1.clone());
+            let d_fc1_b = d_fc1.clone().sum_dim(0).reshape([128]);
+            let d_pool_flat = d_fc1.matmul(model.fc1_w.clone().transpose());
+
+            // 3. Pool (Inverse of average pool)
+            let d_pool = d_pool_flat.reshape([batch_size, 16, 7, 7]);
+            let d_c2_relu = d_pool.repeat_dim(2, 4).repeat_dim(3, 4).div_scalar(16.0);
+
+            // 4. Conv2
+            let mask2 = c2_relu.clone().lower_equal(Tensor::zeros_like(&c2_relu));
+            let d_c2 = d_c2_relu.mask_where(mask2, Tensor::zeros_like(&c2_relu));
             
-            // Grad(b) = sum(output_grad, axis=0)
-            let bias_grad = output_grad.sum_dim(0).flatten(0, 1);
+            let x2_unfold = burn::tensor::module::unfold4d(
+                c1_relu.clone(), 
+                [3, 3], 
+                burn::tensor::ops::UnfoldOptions::new([1, 1], [1, 1], [1, 1])
+            );
+            let d_c2_flat = d_c2.clone().flatten(2, 3); 
+            let d_conv2_w = d_c2_flat.matmul(x2_unfold.transpose())
+                .sum_dim(0)
+                .reshape([16, 8, 3, 3]);
+            let d_conv2_b = d_c2.clone().sum_dim(0).sum_dim(2).sum_dim(3).reshape([16]);
+
+            // Back to c1_relu
+            let d_c1_relu_raw = burn::tensor::module::conv_transpose2d(
+                d_c2,
+                model.conv2_w.clone(),
+                None,
+                burn::tensor::ops::ConvTransposeOptions::new([1, 1], [1, 1], [0, 0], [1, 1], 1)
+            );
+
+            // 5. Conv1
+            let mask1_conv = c1_relu.clone().lower_equal(Tensor::zeros_like(&c1_relu));
+            let d_c1 = d_c1_relu_raw.mask_where(mask1_conv, Tensor::zeros_like(&c1_relu));
+
+            let x1_unfold = burn::tensor::module::unfold4d(
+                input, 
+                [3, 3], 
+                burn::tensor::ops::UnfoldOptions::new([1, 1], [1, 1], [1, 1])
+            );
+            let d_c1_flat = d_c1.clone().flatten(2, 3);
+            let d_conv1_w = d_c1_flat.matmul(x1_unfold.transpose())
+                .sum_dim(0)
+                .reshape([8, 1, 3, 3]);
+            let d_conv1_b = d_c1.clone().sum_dim(0).sum_dim(2).sum_dim(3).reshape([8]);
             
-            // Update weights
-            model.fc2_weight = model.fc2_weight.clone().sub(weight_grad.mul_scalar(learning_rate));
-            model.fc2_bias = model.fc2_bias.clone().sub(bias_grad.mul_scalar(learning_rate));
+            // --- WEIGHT UPDATES (SGD) ---
+            model.fc2_w = model.fc2_w.clone().sub(d_fc2_w.mul_scalar(lr));
+            model.fc2_b = model.fc2_b.clone().sub(d_fc2_b.mul_scalar(lr));
+            model.fc1_w = model.fc1_w.clone().sub(d_fc1_w.mul_scalar(lr));
+            model.fc1_b = model.fc1_b.clone().sub(d_fc1_b.mul_scalar(lr));
+            model.conv2_w = model.conv2_w.clone().sub(d_conv2_w.mul_scalar(lr));
+            model.conv2_b = model.conv2_b.clone().sub(d_conv2_b.mul_scalar(lr));
+            model.conv1_w = model.conv1_w.clone().sub(d_conv1_w.mul_scalar(lr));
+            model.conv1_b = model.conv1_b.clone().sub(d_conv1_b.mul_scalar(lr));
 
             print_progress(batch_idx + 1, num_batches, loss_val);
         }
-        println!(); // New line after progress bar
+        println!("");
 
         // Evaluation phase (Accuracy)
         let mut correct = 0;
@@ -219,8 +312,8 @@ pub fn main() -> i32 {
                 &device,
             );
 
-            let (output, _) = model.forward(input);
-            let predictions = output.argmax(1).flatten::<1>(0, 1).into_data();
+            let (output, _, _, _, _, _) = model.forward_all(input);
+            let predictions = output.argmax(1).reshape([batch_size]).into_data();
             
             let batch_lbls = &test_labels[start..start + batch_size];
             for (p, &l) in predictions.as_slice::<i64>().unwrap().iter().zip(batch_lbls.iter()) {
