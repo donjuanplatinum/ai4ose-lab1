@@ -104,19 +104,33 @@ fn build_apps_and_pack_fs() {
         .join("release");
 
     for (i, name) in names.iter().enumerate() {
-        if name == "doom" || name == "doom1.wad" {
+        if name == "doom" || name == "doom1.wad" 
+            || name == "train-images-idx3-ubyte" 
+            || name == "train-labels-idx1-ubyte" 
+            || name == "train-images-subset-ubyte" 
+            || name == "train-labels-subset-ubyte" 
+        {
             // Copy pre-built doom and data file
-            let src = manifest_dir.parent().unwrap()
-                .join("doomgeneric")
-                .join("doomgeneric")
-                .join(name);
+            let src = if name == "doom" || name == "doom1.wad" {
+                manifest_dir.parent().unwrap()
+                    .join("doomgeneric")
+                    .join("doomgeneric")
+                    .join(name)
+            } else {
+                // MNIST files are in the root or user target dir
+                let root_path = manifest_dir.join(name);
+                if root_path.exists() {
+                    root_path
+                } else {
+                    manifest_dir.join("tg-user").join("target").join(TARGET_ARCH).join("debug").join(name)
+                }
+            };
+            
             let dst = app_target_dir.join(name);
             if src.exists() {
                 fs::copy(&src, &dst).unwrap();
-            } else if name == "doom" {
-                panic!("doom binary not found at {}", src.display());
-            } else if name == "doom1.wad" {
-                panic!("doom1.wad not found at {}", src.display());
+            } else if !dst.exists() {
+                panic!("Resource {} not found at {}", name, src.display());
             }
             continue;
         }
@@ -197,11 +211,11 @@ fn easy_fs_pack(
             .create(true)
             .truncate(true)
             .open(fs_file)?;
-        f.set_len(131072 * BLOCK_SZ as u64).unwrap();
+        f.set_len(262144 * BLOCK_SZ as u64).unwrap();
         f
     })));
 
-    let efs = EasyFileSystem::create(block_file, 131072, 8);
+    let efs = EasyFileSystem::create(block_file, 262144, 8);
     let root_inode = Arc::new(EasyFileSystem::root_inode(&efs));
 
     for case in cases {

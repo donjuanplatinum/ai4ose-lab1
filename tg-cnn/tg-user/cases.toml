@@ -173,6 +173,8 @@ cases = [
    "doom1.wad",
     "test_random",
     "cnn",
+    "train-images-subset-ubyte",
+    "train-labels-subset-ubyte",
 ]
 
 [ch3_exercise]

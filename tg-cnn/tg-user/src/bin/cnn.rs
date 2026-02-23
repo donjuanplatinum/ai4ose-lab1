@@ -2,6 +2,7 @@
 #![no_main]
 
 extern crate alloc;
+use log::log;
 
 use alloc::vec::Vec;
 use burn::backend::NdArray;
@@ -54,89 +55,140 @@ impl<B: Backend> Model<B> {
     }
 }
 
-fn load_mnist_data() -> (Vec<f32>, Vec<u8>) {
-    // Simplified: in a real OS we would iterate over mnist_png/training
-    // For now, we'll try to read a few files to demonstrate the capability
-    println!("Loading MNIST data...");
-    let mut images = Vec::new();
-    let mut labels = Vec::new();
+fn load_mnist_data(num_images: usize) -> (Vec<f32>, Vec<u8>) {
+    println!("Loading MNIST data ({} images)...", num_images);
+    let mut images = Vec::with_capacity(num_images * 28 * 28);
+    let mut labels = Vec::with_capacity(num_images);
 
-    // Example: read one image from "0" category
-    // This is just a placeholder logic to show integration with file system
-    // In actual use, we would use a proper iterator
-    for label in 0..10 {
-        let path = alloc::format!("mnist_png/training/{}/", label);
-        // We'd need a readdir syscall or similar to get filenames
+    // Load images
+    let fd_img = open("train-images-subset-ubyte\0", OpenFlags::RDONLY);
+    if fd_img < 0 {
+        panic!("Failed to open train-images-subset-ubyte");
     }
-    
-    // Returning dummy data for compilation demonstration if needed, 
-    // but ideally we decode PNGs here.
+
+    let mut img_header = [0u8; 16];
+    read(fd_img as usize, &mut img_header);
+
+    let mut img_buf = Vec::with_capacity(num_images * 28 * 28);
+    img_buf.resize(num_images * 28 * 28, 0u8);
+    read(fd_img as usize, &mut img_buf);
+
+    for b in img_buf {
+        images.push(b as f32 / 255.0);
+    }
+    close(fd_img as usize);
+
+    // Load labels
+    let fd_lbl = open("train-labels-subset-ubyte\0", OpenFlags::RDONLY);
+    if fd_lbl < 0 {
+        panic!("Failed to open train-labels-subset-ubyte");
+    }
+
+    let mut lbl_header = [0u8; 8];
+    read(fd_lbl as usize, &mut lbl_header);
+
+    let mut lbl_buf = Vec::with_capacity(num_images);
+    lbl_buf.resize(num_images, 0u8);
+    read(fd_lbl as usize, &mut lbl_buf);
+
+    labels.extend(lbl_buf);
+    close(fd_lbl as usize);
+
     (images, labels)
 }
 
-use burn::tensor::TensorData;
 use burn::nn::loss::CrossEntropyLossConfig;
-
+use burn::tensor::TensorData;
 
 #[no_mangle]
 pub fn main() -> i32 {
     println!("CNN Training on MNIST starting...");
-    
-    // RNG Test
-    let mut seed_bytes = [0u8; 8];
-    let fd = tg_syscall::open("/dev/random\0", user_lib::OpenFlags::RDONLY);
-    println!("fd is {}",fd);
-    if fd >= 0 {
-        read(fd as usize, &mut seed_bytes);
-        println!("Random seed sample: {:?}", seed_bytes);
-        close(fd as usize);
-    } else {
-        println!("Warning: /dev/random not found!");
-    }
-
-    // Use seed for reproducibility if needed
-    let seed = u64::from_le_bytes(seed_bytes);
 
     type MyBackend = NdArray<f32>;
-    // Note: Autodiff requires AutodiffBackend wrapper
-    // But burn-ndarray might not have AutodiffBackend in no-std if not configured.
-    // Actually, burn provides it.
-    
     let device = Default::default();
     let mut model = Model::<MyBackend>::new(&device);
-    
-    // In burn 0.16, optimizers are often in separate crates or submodules
-    // For now, let's just do a forward pass to verify no-std burn works.
-    // println!("Model and Optimizer initialized.");
+
     println!("Model initialized.");
+
+    let total_images = 2000;
+    let (images, labels) = load_mnist_data(total_images);
     
-    // Training Loop (Manual)
+    // Split into train (80%) and test (20%)
+    let num_train = 1600;
+    let num_test = 400;
+    
+    let train_images = images[..num_train * 28 * 28].to_vec();
+    let train_labels = labels[..num_train].to_vec();
+    let test_images = images[num_train * 28 * 28..].to_vec();
+    let test_labels = labels[num_train..].to_vec();
+
+    println!("Dataset split: {} training, {} testing", num_train, num_test);
     println!("Training loop started...");
-    
-    let batch_size = 40;
-    let epochs = 20;
+
+    let batch_size = 32;
+    let epochs = 5;
+    let num_batches = num_train / batch_size;
+
     for epoch in 1..=epochs {
-        // 1. 生成 64 张输入图片
-        let input = Tensor::<MyBackend, 4>::random([batch_size, 1, 28, 28], burn::tensor::Distribution::Default, &device);
+        println!("Epoch: {}", epoch);
+        let mut epoch_loss = 0.0;
         
-        // 💡 修复点：动态生成 64 个标签，防止内存越界
-        let mut target_vec = Vec::with_capacity(batch_size);
-        for i in 0..batch_size {
-            target_vec.push((i % 10) as i32); // 循环填入 0-9 的假标签
+        // Training phase
+        for batch_idx in 0..num_batches {
+            let start = batch_idx * batch_size;
+
+            let batch_imgs = &train_images[start * 28 * 28..(start + batch_size) * 28 * 28];
+            let input = Tensor::<MyBackend, 4>::from_data(
+                TensorData::new(batch_imgs.to_vec(), [batch_size, 1, 28, 28]),
+                &device,
+            );
+
+            let batch_lbls: Vec<i64> = train_labels[start..start + batch_size]
+                .iter()
+                .map(|&l| l as i64)
+                .collect();
+            let targets = Tensor::<MyBackend, 1, Int>::from_data(
+                TensorData::from(batch_lbls.as_slice()),
+                &device,
+            );
+
+            let output = model.forward(input);
+            let loss_config = CrossEntropyLossConfig::new();
+            let loss = loss_config.init(&device).forward(output, targets.clone());
+
+            epoch_loss += loss.clone().into_scalar();
         }
 
-        // 2. 将这 64 个标签喂给 Tensor
-        let targets = Tensor::<MyBackend, 1, Int>::from_data(
-            TensorData::from(target_vec.as_slice()),
-            &device
-        );
+        // Evaluation phase (Accuracy)
+        let mut correct = 0;
+        let test_batches = num_test / batch_size;
+        for batch_idx in 0..test_batches {
+            let start = batch_idx * batch_size;
+            let batch_imgs = &test_images[start * 28 * 28..(start + batch_size) * 28 * 28];
+            let input = Tensor::<MyBackend, 4>::from_data(
+                TensorData::new(batch_imgs.to_vec(), [batch_size, 1, 28, 28]),
+                &device,
+            );
 
-        let output = model.forward(input);
+            let output = model.forward(input);
+            let predictions = output.argmax(1).flatten::<1>(0, 1).into_data();
+            
+            let batch_lbls = &test_labels[start..start + batch_size];
+            for (p, &l) in predictions.as_slice::<i64>().unwrap().iter().zip(batch_lbls.iter()) {
+                if (*p as u8) == l {
+                    correct += 1;
+                }
+            }
+        }
         
-        let loss_config = CrossEntropyLossConfig::new();
-        let loss = loss_config.init(&device).forward(output, targets.clone());
-
-        println!("Epoch {}/{}: Loss={}", epoch, epochs, loss.clone().into_scalar());
+        let accuracy = (correct as f32 / (test_batches * batch_size) as f32) * 100.0;
+        println!(
+            "Epoch {}/{}: Avg Loss={:.4}, Accuracy={:.2}%",
+            epoch,
+            epochs,
+            epoch_loss / num_batches as f32,
+            accuracy
+        );
     }
 
     println!("Training completed!");
