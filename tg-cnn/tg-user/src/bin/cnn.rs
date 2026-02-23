@@ -97,12 +97,28 @@ fn load_mnist_data(num_images: usize) -> (Vec<f32>, Vec<u8>) {
     (images, labels)
 }
 
-use burn::nn::loss::CrossEntropyLossConfig;
+use burn::nn::loss::{HuberLossConfig, Reduction};
 use burn::tensor::TensorData;
+
+fn print_progress(current: usize, total: usize, loss: f32) {
+    let width = 30;
+    let progress = (current as f32 / total as f32 * width as f32) as usize;
+    print!("\r[");
+    for i in 0..width {
+        if i < progress {
+            print!("=");
+        } else if i == progress {
+            print!(">");
+        } else {
+            print!(" ");
+        }
+    }
+    print!("] {}/{} Loss: {:.4}", current, total, loss);
+}
 
 #[no_mangle]
 pub fn main() -> i32 {
-    println!("CNN Training on MNIST starting...");
+    println!("CNN Training on MNIST starting (HuberLoss)...");
 
     type MyBackend = NdArray<f32>;
     let device = Default::default();
@@ -130,7 +146,7 @@ pub fn main() -> i32 {
     let num_batches = num_train / batch_size;
 
     for epoch in 1..=epochs {
-        println!("Epoch: {}", epoch);
+        println!("Epoch {}/{}", epoch, epochs);
         let mut epoch_loss = 0.0;
         
         // Training phase
@@ -143,21 +159,29 @@ pub fn main() -> i32 {
                 &device,
             );
 
-            let batch_lbls: Vec<i64> = train_labels[start..start + batch_size]
-                .iter()
-                .map(|&l| l as i64)
-                .collect();
-            let targets = Tensor::<MyBackend, 1, Int>::from_data(
-                TensorData::from(batch_lbls.as_slice()),
-                &device,
+            // One-hot encoding for HuberLoss (Regression-style targets)
+            let mut one_hot_data = Vec::with_capacity(batch_size * 10);
+            for i in 0..batch_size {
+                let label = train_labels[start + i];
+                for class in 0..10 {
+                    one_hot_data.push(if class == label as usize { 1.0 } else { 0.0 });
+                }
+            }
+            let targets = Tensor::<MyBackend, 2>::from_data(
+                TensorData::new(one_hot_data, [batch_size, 10]),
+                &device
             );
 
             let output = model.forward(input);
-            let loss_config = CrossEntropyLossConfig::new();
-            let loss = loss_config.init(&device).forward(output, targets.clone());
+            let loss_config = HuberLossConfig::new(1.0);
+            let loss = loss_config.init().forward(output, targets, Reduction::Mean);
 
-            epoch_loss += loss.clone().into_scalar();
+            let loss_val = loss.clone().into_scalar();
+            epoch_loss += loss_val;
+            
+            print_progress(batch_idx + 1, num_batches, loss_val);
         }
+        println!(); // New line after progress bar
 
         // Evaluation phase (Accuracy)
         let mut correct = 0;
