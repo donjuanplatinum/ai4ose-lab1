@@ -19,7 +19,8 @@ pub struct Model<B: Backend> {
     conv2: Conv2d<B>,
     pool: AdaptiveAvgPool2d,
     fc1: Linear<B>,
-    fc2: Linear<B>,
+    pub fc2_weight: Tensor<B, 2>,
+    pub fc2_bias: Tensor<B, 1>,
     relu: Relu,
 }
 
@@ -29,7 +30,11 @@ impl<B: Backend> Model<B> {
         let conv2 = Conv2dConfig::new([8, 16], [3, 3]).init(device);
         let pool = AdaptiveAvgPool2dConfig::new([7, 7]).init();
         let fc1 = LinearConfig::new(16 * 7 * 7, 128).init(device);
-        let fc2 = LinearConfig::new(128, 10).init(device);
+        
+        // Manual weights for the last layer to allow manual optimization
+        let fc2_weight = Tensor::<B, 2>::random([128, 10], burn::tensor::Distribution::Default, device);
+        let fc2_bias = Tensor::<B, 1>::zeros([10], device);
+        
         let relu = Relu::new();
 
         Self {
@@ -37,12 +42,13 @@ impl<B: Backend> Model<B> {
             conv2,
             pool,
             fc1,
-            fc2,
+            fc2_weight,
+            fc2_bias,
             relu,
         }
     }
 
-    pub fn forward(&self, input: Tensor<B, 4>) -> Tensor<B, 2> {
+    pub fn forward(&self, input: Tensor<B, 4>) -> (Tensor<B, 2>, Tensor<B, 2>) {
         let x = self.conv1.forward(input);
         let x = self.relu.forward(x);
         let x = self.conv2.forward(x);
@@ -50,8 +56,13 @@ impl<B: Backend> Model<B> {
         let x = self.pool.forward(x);
         let x = x.flatten(1, 3);
         let x = self.fc1.forward(x);
-        let x = self.relu.forward(x);
-        self.fc2.forward(x)
+        let features = self.relu.forward(x);
+        
+        // Manual Linear layer: y = x * W + b
+        // Output shape: [batch_size, 10]
+        // Explicitly unsqueeze bias for broadcasting [10] -> [1, 10]
+        let output = features.clone().matmul(self.fc2_weight.clone()).add(self.fc2_bias.clone().unsqueeze_dim(0));
+        (output, features)
     }
 }
 
@@ -97,7 +108,6 @@ fn load_mnist_data(num_images: usize) -> (Vec<f32>, Vec<u8>) {
     (images, labels)
 }
 
-use burn::nn::loss::{HuberLossConfig, Reduction};
 use burn::tensor::TensorData;
 
 fn print_progress(current: usize, total: usize, loss: f32) {
@@ -118,7 +128,7 @@ fn print_progress(current: usize, total: usize, loss: f32) {
 
 #[no_mangle]
 pub fn main() -> i32 {
-    println!("CNN Training on MNIST starting (HuberLoss)...");
+    println!("CNN Training on MNIST starting (Manual MSE SGD)...");
 
     type MyBackend = NdArray<f32>;
     let device = Default::default();
@@ -143,6 +153,7 @@ pub fn main() -> i32 {
 
     let batch_size = 32;
     let epochs = 5;
+    let learning_rate = 0.01;
     let num_batches = num_train / batch_size;
 
     for epoch in 1..=epochs {
@@ -159,7 +170,7 @@ pub fn main() -> i32 {
                 &device,
             );
 
-            // One-hot encoding for HuberLoss (Regression-style targets)
+            // One-hot encoding for MSE
             let mut one_hot_data = Vec::with_capacity(batch_size * 10);
             for i in 0..batch_size {
                 let label = train_labels[start + i];
@@ -172,13 +183,27 @@ pub fn main() -> i32 {
                 &device
             );
 
-            let output = model.forward(input);
-            let loss_config = HuberLossConfig::new(1.0);
-            let loss = loss_config.init().forward(output, targets, Reduction::Mean);
-
+            let (output, features) = model.forward(input);
+            
+            // Manual MSE Loss: mean((output - targets)^2)
+            let loss = output.clone().sub(targets.clone()).powf_scalar(2.0).mean();
             let loss_val = loss.clone().into_scalar();
             epoch_loss += loss_val;
+
+            // Manual SGD for the last layer (fc2)
+            // Grad(output) = (output - targets) / batch_size
+            let output_grad = output.sub(targets).div_scalar(batch_size as f32);
             
+            // Grad(W) = features^T * output_grad
+            let weight_grad = features.transpose().matmul(output_grad.clone());
+            
+            // Grad(b) = sum(output_grad, axis=0)
+            let bias_grad = output_grad.sum_dim(0).flatten(0, 1);
+            
+            // Update weights
+            model.fc2_weight = model.fc2_weight.clone().sub(weight_grad.mul_scalar(learning_rate));
+            model.fc2_bias = model.fc2_bias.clone().sub(bias_grad.mul_scalar(learning_rate));
+
             print_progress(batch_idx + 1, num_batches, loss_val);
         }
         println!(); // New line after progress bar
@@ -194,7 +219,7 @@ pub fn main() -> i32 {
                 &device,
             );
 
-            let output = model.forward(input);
+            let (output, _) = model.forward(input);
             let predictions = output.argmax(1).flatten::<1>(0, 1).into_data();
             
             let batch_lbls = &test_labels[start..start + batch_size];
